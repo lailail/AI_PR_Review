@@ -37,7 +37,7 @@ const workflowSteps = [
   "解析 GitHub PR 链接",
   "获取 PR 元数据与变更文件",
   "整理 diff patch 上下文",
-  "调用 DeepSeek 生成变更总结",
+  "生成总结并识别风险代码",
 ];
 
 function getInputState(prUrl) {
@@ -96,17 +96,20 @@ function truncatePatch(patch) {
 }
 
 /**
- * 首页是 PR 3 的主要交互面。
+ * 首页是 PR 4 的主要交互面。
  * 前端只请求项目自己的 API Route，GitHub Token、DeepSeek API Key 和外部 API 细节都由服务端处理。
  */
 export default function Home() {
   const [prUrl, setPrUrl] = useState("");
   const [pullRequestData, setPullRequestData] = useState(null);
   const [summary, setSummary] = useState(null);
+  const [riskResult, setRiskResult] = useState(null);
   const [error, setError] = useState("");
   const [summaryError, setSummaryError] = useState("");
+  const [riskError, setRiskError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSummaryLoading, setIsSummaryLoading] = useState(false);
+  const [isRiskLoading, setIsRiskLoading] = useState(false);
 
   const inputState = useMemo(() => getInputState(prUrl), [prUrl]);
 
@@ -118,7 +121,9 @@ export default function Home() {
     event.preventDefault();
     setError("");
     setSummary("");
+    setRiskResult(null);
     setSummaryError("");
+    setRiskError("");
     setPullRequestData(null);
     setIsLoading(true);
 
@@ -183,6 +188,41 @@ export default function Home() {
     }
   }
 
+  /**
+   * 识别 PR 风险代码。
+   * 风险识别依赖已获取的 PR diff，上下文和 DeepSeek API Key 都由服务端接口处理。
+   */
+  async function handleDetectRisks() {
+    if (!pullRequestData) {
+      return;
+    }
+
+    setRiskError("");
+    setRiskResult(null);
+    setIsRiskLoading(true);
+
+    try {
+      const response = await fetch("/api/risk-detection", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(pullRequestData),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error?.message || "识别 PR 风险代码失败。");
+      }
+
+      setRiskResult(data);
+    } catch (requestError) {
+      setRiskError(requestError.message);
+    } finally {
+      setIsRiskLoading(false);
+    }
+  }
+
   const pr = pullRequestData?.pr;
   const files = pullRequestData?.files || [];
 
@@ -196,18 +236,18 @@ export default function Home() {
           </p>
           <h1>AI PR Review Assistant</h1>
         </div>
-        <span className="stage-badge">PR 3 DeepSeek 总结版本</span>
+        <span className="stage-badge">PR 4 风险识别版本</span>
       </header>
 
       <section className="workspace" aria-label="AI PR Review 工作台">
         <div className="primary-panel">
           <div className="panel-heading">
-              <SearchCheck size={24} aria-hidden="true" />
-              <div>
-                <h2>输入 Pull Request 链接</h2>
-                <p>系统会解析 PR URL，获取 GitHub 变更上下文，并可调用 DeepSeek 生成结构化变更总结。</p>
-              </div>
+            <SearchCheck size={24} aria-hidden="true" />
+            <div>
+              <h2>输入 Pull Request 链接</h2>
+              <p>系统会解析 PR URL，获取 GitHub 变更上下文，并可调用 DeepSeek 生成总结和识别风险代码。</p>
             </div>
+          </div>
 
           <form className="input-panel" aria-label="PR 分析入口" onSubmit={handleAnalyzeSubmit}>
             <label htmlFor="pr-url">GitHub PR URL</label>
@@ -247,6 +287,15 @@ export default function Home() {
                 {isSummaryLoading ? "生成中" : "生成变更总结"}
               </button>
               <p>基于已获取的 PR 标题、描述、变更文件和 diff patch 调用 DeepSeek。</p>
+              <button type="button" className="risk-button" onClick={handleDetectRisks} disabled={isRiskLoading}>
+                {isRiskLoading ? (
+                  <Loader2 className="spin" size={18} aria-hidden="true" />
+                ) : (
+                  <AlertTriangle size={18} aria-hidden="true" />
+                )}
+                {isRiskLoading ? "识别中" : "识别风险代码"}
+              </button>
+              <p>结合规则预筛选和 DeepSeek 分析权限、数据、配置、测试等高风险变更。</p>
             </div>
           ) : null}
         </div>
@@ -274,7 +323,7 @@ export default function Home() {
           <p>
             {pr
               ? `已获取 ${pr.owner}/${pr.repo} #${pr.number} 的基础信息和 ${files.length} 个变更文件。`
-              : "当前区域会展示真实 PR 信息。获取成功后可生成 DeepSeek 变更总结。"}
+              : "当前区域会展示真实 PR 信息。获取成功后可生成 DeepSeek 总结并识别风险代码。"}
           </p>
         </div>
 
@@ -339,6 +388,21 @@ export default function Home() {
               )}
             </div>
 
+            <div className="risk-panel">
+              <div className="files-heading">
+                <AlertTriangle size={20} aria-hidden="true" />
+                <h3>风险代码识别</h3>
+              </div>
+              {riskError ? <p className="error-message">{riskError}</p> : null}
+              {riskResult ? (
+                <RiskDetectionResult risks={riskResult.risks} ruleSignals={riskResult.ruleSignals} />
+              ) : (
+                <p className="summary-empty">
+                  点击“识别风险代码”后，这里会展示风险等级、证据、原因、建议和置信度。
+                </p>
+              )}
+            </div>
+
             <div className="files-panel">
               <div className="files-heading">
                 <FileCode2 size={20} aria-hidden="true" />
@@ -393,4 +457,64 @@ function SummaryList({ title, items }) {
       </ul>
     </div>
   );
+}
+
+function RiskDetectionResult({ risks = [], ruleSignals = [] }) {
+  return (
+    <div className="risk-result">
+      {risks.length > 0 ? (
+        <div className="risk-list">
+          {risks.map((risk) => (
+            <article className={`risk-item ${risk.severity}`} key={`${risk.file}-${risk.evidence}`}>
+              <div className="risk-item-header">
+                <span className={`severity-badge ${risk.severity}`}>{getSeverityLabel(risk.severity)}</span>
+                <strong>{risk.category}</strong>
+                <span>{Math.round((risk.confidence || 0) * 100)}% 置信度</span>
+              </div>
+              <p className="risk-file">{risk.file}</p>
+              <p>
+                <strong>证据：</strong>
+                {risk.evidence}
+              </p>
+              <p>
+                <strong>原因：</strong>
+                {risk.reason}
+              </p>
+              <p>
+                <strong>建议：</strong>
+                {risk.suggestion}
+              </p>
+              {risk.confidence < 0.5 ? <p className="low-confidence">低置信度，建议人工确认。</p> : null}
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="summary-empty">未发现明显高风险变更，仍建议 Reviewer 结合业务上下文人工确认。</p>
+      )}
+
+      {ruleSignals.length > 0 ? (
+        <div className="rule-signal-panel">
+          <h4>规则预筛选信号</h4>
+          <ul>
+            {ruleSignals.map((signal) => (
+              <li key={signal.file}>
+                <strong>{signal.file}</strong>
+                <span>{signal.labels.join("、")}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function getSeverityLabel(severity) {
+  const labelMap = {
+    high: "高风险",
+    medium: "中风险",
+    low: "低风险",
+  };
+
+  return labelMap[severity] || "低风险";
 }
