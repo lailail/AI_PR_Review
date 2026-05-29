@@ -2,7 +2,9 @@
 
 import {
   AlertTriangle,
+  CheckCircle2,
   ClipboardCheck,
+  Copy,
   ExternalLink,
   FileCode2,
   FileSearch,
@@ -37,7 +39,7 @@ const workflowSteps = [
   "解析 GitHub PR 链接",
   "获取 PR 元数据与变更文件",
   "整理 diff patch 上下文",
-  "生成总结并识别风险代码",
+  "生成总结、风险和 Review 建议",
 ];
 
 function getInputState(prUrl) {
@@ -104,14 +106,24 @@ export default function Home() {
   const [pullRequestData, setPullRequestData] = useState(null);
   const [summary, setSummary] = useState(null);
   const [riskResult, setRiskResult] = useState(null);
+  const [reviewResult, setReviewResult] = useState(null);
   const [error, setError] = useState("");
   const [summaryError, setSummaryError] = useState("");
   const [riskError, setRiskError] = useState("");
+  const [reviewError, setReviewError] = useState("");
+  const [copyStatus, setCopyStatus] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSummaryLoading, setIsSummaryLoading] = useState(false);
   const [isRiskLoading, setIsRiskLoading] = useState(false);
+  const [isReviewLoading, setIsReviewLoading] = useState(false);
+  const [showLowConfidence, setShowLowConfidence] = useState(false);
 
   const inputState = useMemo(() => getInputState(prUrl), [prUrl]);
+  const visibleReviewSuggestions = useMemo(() => {
+    const suggestions = reviewResult?.suggestions || [];
+
+    return showLowConfidence ? suggestions : suggestions.filter((suggestion) => suggestion.confidence >= 0.5);
+  }, [reviewResult, showLowConfidence]);
 
   /**
    * 提交 PR URL 后调用后端接口获取真实 GitHub 数据。
@@ -120,10 +132,13 @@ export default function Home() {
   async function handleAnalyzeSubmit(event) {
     event.preventDefault();
     setError("");
-    setSummary("");
+    setSummary(null);
     setRiskResult(null);
+    setReviewResult(null);
     setSummaryError("");
     setRiskError("");
+    setReviewError("");
+    setCopyStatus("");
     setPullRequestData(null);
     setIsLoading(true);
 
@@ -164,6 +179,9 @@ export default function Home() {
 
     setSummaryError("");
     setSummary(null);
+    setReviewResult(null);
+    setReviewError("");
+    setCopyStatus("");
     setIsSummaryLoading(true);
 
     try {
@@ -199,6 +217,9 @@ export default function Home() {
 
     setRiskError("");
     setRiskResult(null);
+    setReviewResult(null);
+    setReviewError("");
+    setCopyStatus("");
     setIsRiskLoading(true);
 
     try {
@@ -223,6 +244,63 @@ export default function Home() {
     }
   }
 
+  /**
+   * 生成最终 Review 建议。
+   * 这里复用 PR 数据、变更总结和风险识别结果，让模型既理解整体变化，也能围绕已有证据给出可复制建议。
+   */
+  async function handleGenerateReviewSuggestions() {
+    if (!pullRequestData) {
+      return;
+    }
+
+    setReviewError("");
+    setReviewResult(null);
+    setCopyStatus("");
+    setIsReviewLoading(true);
+
+    try {
+      const response = await fetch("/api/review-suggestions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...pullRequestData,
+          summary,
+          risks: riskResult?.risks || [],
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error?.message || "生成 Review 建议失败。");
+      }
+
+      setReviewResult(data);
+    } catch (requestError) {
+      setReviewError(requestError.message);
+    } finally {
+      setIsReviewLoading(false);
+    }
+  }
+
+  /**
+   * 复制 Markdown Review 结果。
+   * 复制动作依赖浏览器剪贴板权限，失败时给出明确提示，避免用户误以为已经复制成功。
+   */
+  async function handleCopyReviewMarkdown() {
+    if (!reviewResult?.markdown) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(reviewResult.markdown);
+      setCopyStatus("已复制 Markdown Review 结果。");
+    } catch {
+      setCopyStatus("复制失败，请手动选择 Markdown 内容复制。");
+    }
+  }
+
   const pr = pullRequestData?.pr;
   const files = pullRequestData?.files || [];
 
@@ -236,7 +314,7 @@ export default function Home() {
           </p>
           <h1>AI PR Review Assistant</h1>
         </div>
-        <span className="stage-badge">PR 4 风险识别版本</span>
+        <span className="stage-badge">PR 5 Review 建议版本</span>
       </header>
 
       <section className="workspace" aria-label="AI PR Review 工作台">
@@ -245,7 +323,7 @@ export default function Home() {
             <SearchCheck size={24} aria-hidden="true" />
             <div>
               <h2>输入 Pull Request 链接</h2>
-              <p>系统会解析 PR URL，获取 GitHub 变更上下文，并可调用 DeepSeek 生成总结和识别风险代码。</p>
+              <p>系统会解析 PR URL，获取 GitHub 变更上下文，并可调用 DeepSeek 生成总结、风险和 Review 建议。</p>
             </div>
           </div>
 
@@ -296,6 +374,15 @@ export default function Home() {
                 {isRiskLoading ? "识别中" : "识别风险代码"}
               </button>
               <p>结合规则预筛选和 DeepSeek 分析权限、数据、配置、测试等高风险变更。</p>
+              <button type="button" className="review-button" onClick={handleGenerateReviewSuggestions} disabled={isReviewLoading}>
+                {isReviewLoading ? (
+                  <Loader2 className="spin" size={18} aria-hidden="true" />
+                ) : (
+                  <ClipboardCheck size={18} aria-hidden="true" />
+                )}
+                {isReviewLoading ? "生成中" : "生成 Review 建议"}
+              </button>
+              <p>综合 PR 数据、变更总结和风险识别结果，生成可复制到 GitHub 的 Markdown Review。</p>
             </div>
           ) : null}
         </div>
@@ -323,7 +410,7 @@ export default function Home() {
           <p>
             {pr
               ? `已获取 ${pr.owner}/${pr.repo} #${pr.number} 的基础信息和 ${files.length} 个变更文件。`
-              : "当前区域会展示真实 PR 信息。获取成功后可生成 DeepSeek 总结并识别风险代码。"}
+              : "当前区域会展示真实 PR 信息。获取成功后可生成 DeepSeek 总结、风险识别和 Review 建议。"}
           </p>
         </div>
 
@@ -403,6 +490,29 @@ export default function Home() {
               )}
             </div>
 
+            <div className="review-suggestion-panel">
+              <div className="files-heading">
+                <ClipboardCheck size={20} aria-hidden="true" />
+                <h3>Review 建议</h3>
+              </div>
+              {reviewError ? <p className="error-message">{reviewError}</p> : null}
+              {reviewResult ? (
+                <ReviewSuggestionResult
+                  suggestions={visibleReviewSuggestions}
+                  totalCount={reviewResult.suggestions.length}
+                  markdown={reviewResult.markdown}
+                  showLowConfidence={showLowConfidence}
+                  copyStatus={copyStatus}
+                  onToggleLowConfidence={() => setShowLowConfidence((value) => !value)}
+                  onCopyMarkdown={handleCopyReviewMarkdown}
+                />
+              ) : (
+                <p className="summary-empty">
+                  点击“生成 Review 建议”后，这里会展示可复制的结构化 Review 建议。
+                </p>
+              )}
+            </div>
+
             <div className="files-panel">
               <div className="files-heading">
                 <FileCode2 size={20} aria-hidden="true" />
@@ -455,6 +565,70 @@ function SummaryList({ title, items }) {
           <li key={item}>{item}</li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function ReviewSuggestionResult({
+  suggestions = [],
+  totalCount = 0,
+  markdown = "",
+  showLowConfidence,
+  copyStatus,
+  onToggleLowConfidence,
+  onCopyMarkdown,
+}) {
+  const hiddenCount = Math.max(totalCount - suggestions.length, 0);
+
+  return (
+    <div className="review-suggestion-result">
+      <div className="review-toolbar">
+        <label className="confidence-toggle">
+          <input type="checkbox" checked={showLowConfidence} onChange={onToggleLowConfidence} />
+          显示低置信度建议
+        </label>
+        <button type="button" className="copy-button" onClick={onCopyMarkdown} disabled={!markdown}>
+          {copyStatus.startsWith("已复制") ? (
+            <CheckCircle2 size={17} aria-hidden="true" />
+          ) : (
+            <Copy size={17} aria-hidden="true" />
+          )}
+          复制 Markdown
+        </button>
+      </div>
+
+      {copyStatus ? <p className="copy-status">{copyStatus}</p> : null}
+      {hiddenCount > 0 ? <p className="low-confidence">已隐藏 {hiddenCount} 条低置信度建议。</p> : null}
+
+      {suggestions.length > 0 ? (
+        <div className="suggestion-list">
+          {suggestions.map((suggestion) => (
+            <article className={`suggestion-item ${suggestion.severity}`} key={`${suggestion.file}-${suggestion.problem}`}>
+              <div className="risk-item-header">
+                <span className={`severity-badge ${suggestion.severity}`}>{getSeverityLabel(suggestion.severity)}</span>
+                <strong>{suggestion.line ? `${suggestion.file}:${suggestion.line}` : suggestion.file}</strong>
+                <span>{Math.round((suggestion.confidence || 0) * 100)}% 置信度</span>
+              </div>
+              <p>
+                <strong>问题：</strong>
+                {suggestion.problem}
+              </p>
+              <p>
+                <strong>建议：</strong>
+                {suggestion.suggestion}
+              </p>
+              {suggestion.confidence < 0.5 ? <p className="low-confidence">低置信度，需要人工确认。</p> : null}
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="summary-empty">未发现明确需要提出的 Review 建议，仍建议结合业务上下文人工确认。</p>
+      )}
+
+      <details className="markdown-preview">
+        <summary>查看 Markdown 预览</summary>
+        <pre>{markdown}</pre>
+      </details>
     </div>
   );
 }
