@@ -8,6 +8,7 @@ import {
   FileSearch,
   GitPullRequestArrow,
   Loader2,
+  MessageSquareText,
   SearchCheck,
   ShieldCheck,
   Sparkles,
@@ -36,7 +37,7 @@ const workflowSteps = [
   "解析 GitHub PR 链接",
   "获取 PR 元数据与变更文件",
   "整理 diff patch 上下文",
-  "为后续 AI 分析准备数据",
+  "调用 DeepSeek 生成变更总结",
 ];
 
 function getInputState(prUrl) {
@@ -95,14 +96,17 @@ function truncatePatch(patch) {
 }
 
 /**
- * 首页是 PR 2 的主要交互面。
- * 前端只请求项目自己的 API Route，GitHub Token 和外部 API 细节都由服务端处理。
+ * 首页是 PR 3 的主要交互面。
+ * 前端只请求项目自己的 API Route，GitHub Token、DeepSeek API Key 和外部 API 细节都由服务端处理。
  */
 export default function Home() {
   const [prUrl, setPrUrl] = useState("");
   const [pullRequestData, setPullRequestData] = useState(null);
+  const [summary, setSummary] = useState(null);
   const [error, setError] = useState("");
+  const [summaryError, setSummaryError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isSummaryLoading, setIsSummaryLoading] = useState(false);
 
   const inputState = useMemo(() => getInputState(prUrl), [prUrl]);
 
@@ -113,6 +117,8 @@ export default function Home() {
   async function handleAnalyzeSubmit(event) {
     event.preventDefault();
     setError("");
+    setSummary("");
+    setSummaryError("");
     setPullRequestData(null);
     setIsLoading(true);
 
@@ -142,6 +148,41 @@ export default function Home() {
     }
   }
 
+  /**
+   * 生成 PR 变更总结。
+   * 只有先获取 GitHub PR 数据，才有足够上下文交给 DeepSeek 做结构化总结。
+   */
+  async function handleGenerateSummary() {
+    if (!pullRequestData) {
+      return;
+    }
+
+    setSummaryError("");
+    setSummary(null);
+    setIsSummaryLoading(true);
+
+    try {
+      const response = await fetch("/api/ai-summary", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(pullRequestData),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error?.message || "生成 PR 变更总结失败。");
+      }
+
+      setSummary(data.summary);
+    } catch (requestError) {
+      setSummaryError(requestError.message);
+    } finally {
+      setIsSummaryLoading(false);
+    }
+  }
+
   const pr = pullRequestData?.pr;
   const files = pullRequestData?.files || [];
 
@@ -155,18 +196,18 @@ export default function Home() {
           </p>
           <h1>AI PR Review Assistant</h1>
         </div>
-        <span className="stage-badge">PR 2 数据获取版本</span>
+        <span className="stage-badge">PR 3 DeepSeek 总结版本</span>
       </header>
 
       <section className="workspace" aria-label="AI PR Review 工作台">
         <div className="primary-panel">
           <div className="panel-heading">
-            <SearchCheck size={24} aria-hidden="true" />
-            <div>
-              <h2>输入 Pull Request 链接</h2>
-              <p>系统会解析 PR URL，并从 GitHub 获取标题、作者、增删行和变更文件列表。</p>
+              <SearchCheck size={24} aria-hidden="true" />
+              <div>
+                <h2>输入 Pull Request 链接</h2>
+                <p>系统会解析 PR URL，获取 GitHub 变更上下文，并可调用 DeepSeek 生成结构化变更总结。</p>
+              </div>
             </div>
-          </div>
 
           <form className="input-panel" aria-label="PR 分析入口" onSubmit={handleAnalyzeSubmit}>
             <label htmlFor="pr-url">GitHub PR URL</label>
@@ -194,6 +235,20 @@ export default function Home() {
             </p>
             {error ? <p className="error-message">{error}</p> : null}
           </form>
+
+          {pr ? (
+            <div className="summary-action">
+              <button type="button" onClick={handleGenerateSummary} disabled={isSummaryLoading}>
+                {isSummaryLoading ? (
+                  <Loader2 className="spin" size={18} aria-hidden="true" />
+                ) : (
+                  <MessageSquareText size={18} aria-hidden="true" />
+                )}
+                {isSummaryLoading ? "生成中" : "生成变更总结"}
+              </button>
+              <p>基于已获取的 PR 标题、描述、变更文件和 diff patch 调用 DeepSeek。</p>
+            </div>
+          ) : null}
         </div>
 
         <aside className="workflow-panel" aria-label="AI Review 工作流预览">
@@ -219,7 +274,7 @@ export default function Home() {
           <p>
             {pr
               ? `已获取 ${pr.owner}/${pr.repo} #${pr.number} 的基础信息和 ${files.length} 个变更文件。`
-              : "当前区域会展示真实 PR 信息。PR 3 将基于这些上下文生成 AI 变更总结。"}
+              : "当前区域会展示真实 PR 信息。获取成功后可生成 DeepSeek 变更总结。"}
           </p>
         </div>
 
@@ -262,6 +317,28 @@ export default function Home() {
               <p>{pr.body || "该 PR 没有填写描述。"}</p>
             </div>
 
+            <div className="ai-summary-panel">
+              <div className="files-heading">
+                <MessageSquareText size={20} aria-hidden="true" />
+                <h3>AI 变更总结</h3>
+              </div>
+              {summaryError ? <p className="error-message">{summaryError}</p> : null}
+              {summary ? (
+                <div className="summary-result">
+                  <p className="summary-overview">{summary.overview}</p>
+                  <SummaryList title="业务变化" items={summary.businessChanges} />
+                  <SummaryList title="技术变化" items={summary.technicalChanges} />
+                  <SummaryList title="测试变化" items={summary.testChanges} />
+                  <SummaryList title="影响范围" items={summary.impactScope} />
+                  <SummaryList title="Review 关注点" items={summary.reviewFocus} />
+                </div>
+              ) : (
+                <p className="summary-empty">
+                  点击“生成变更总结”后，这里会展示 DeepSeek 基于当前 PR 上下文生成的结构化摘要。
+                </p>
+              )}
+            </div>
+
             <div className="files-panel">
               <div className="files-heading">
                 <FileCode2 size={20} aria-hidden="true" />
@@ -302,5 +379,18 @@ export default function Home() {
         )}
       </section>
     </main>
+  );
+}
+
+function SummaryList({ title, items }) {
+  return (
+    <div className="summary-list">
+      <h4>{title}</h4>
+      <ul>
+        {(items || []).map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </div>
   );
 }
