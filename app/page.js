@@ -3,8 +3,11 @@
 import {
   AlertTriangle,
   ClipboardCheck,
+  ExternalLink,
+  FileCode2,
   FileSearch,
   GitPullRequestArrow,
+  Loader2,
   SearchCheck,
   ShieldCheck,
   Sparkles,
@@ -32,19 +35,15 @@ const reviewSections = [
 const workflowSteps = [
   "解析 GitHub PR 链接",
   "获取 PR 元数据与变更文件",
-  "筛选关键上下文",
-  "调用 AI 生成 Review 结果",
+  "整理 diff patch 上下文",
+  "为后续 AI 分析准备数据",
 ];
 
-/**
- * 判断用户输入是否像一个 GitHub Pull Request 链接。
- * PR 1 阶段只做前端提示，不请求 GitHub；真实解析逻辑会在 PR 2 中实现。
- */
 function getInputState(prUrl) {
   if (!prUrl.trim()) {
     return {
       label: "等待输入",
-      message: "输入 GitHub PR 链接后，后续版本会自动拉取变更并分析。",
+      message: "输入 GitHub PR 链接后，系统会自动获取 PR 基础信息和变更文件。",
       tone: "neutral",
     };
   }
@@ -58,31 +57,93 @@ function getInputState(prUrl) {
   }
 
   return {
-    label: "入口已就绪",
-    message: "当前 PR 1 仅搭建分析入口，真实 GitHub 数据获取将在 PR 2 实现。",
+    label: "可以获取",
+    message: "点击开始分析后，将通过后端接口请求 GitHub PR 数据。",
     tone: "ready",
   };
 }
 
+function formatDate(dateValue) {
+  if (!dateValue) {
+    return "未知";
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(dateValue));
+}
+
+function getFileStatusLabel(status) {
+  const statusMap = {
+    added: "新增",
+    modified: "修改",
+    removed: "删除",
+    renamed: "重命名",
+    changed: "变更",
+  };
+
+  return statusMap[status] || status;
+}
+
+function truncatePatch(patch) {
+  if (!patch) {
+    return "该文件没有可展示的 patch，可能是二进制文件或变更过大。";
+  }
+
+  return patch.length > 900 ? `${patch.slice(0, 900)}\n...` : patch;
+}
+
 /**
- * 首页是 PR 1 的核心交付物。
- * 页面采用工具工作台布局，让输入入口、处理流程和评审结果占位都能在首屏清晰出现。
+ * 首页是 PR 2 的主要交互面。
+ * 前端只请求项目自己的 API Route，GitHub Token 和外部 API 细节都由服务端处理。
  */
 export default function Home() {
   const [prUrl, setPrUrl] = useState("");
+  const [pullRequestData, setPullRequestData] = useState(null);
+  const [error, setError] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
   const inputState = useMemo(() => getInputState(prUrl), [prUrl]);
 
   /**
-   * PR 1 阶段点击按钮只滚动到结果区域。
-   * 这样可以演示完整使用路径，同时避免在初始化 PR 中混入真实 API 调用。
+   * 提交 PR URL 后调用后端接口获取真实 GitHub 数据。
+   * 这里不直接访问 GitHub，是为了避免把服务端 Token 暴露到浏览器。
    */
-  function handleAnalyzeClick() {
-    document.getElementById("review-preview")?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
+  async function handleAnalyzeSubmit(event) {
+    event.preventDefault();
+    setError("");
+    setPullRequestData(null);
+    setIsLoading(true);
+
+    try {
+      const response = await fetch("/api/github-pr", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ prUrl }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error?.message || "获取 Pull Request 数据失败。");
+      }
+
+      setPullRequestData(data);
+      document.getElementById("review-preview")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setIsLoading(false);
+    }
   }
+
+  const pr = pullRequestData?.pr;
+  const files = pullRequestData?.files || [];
 
   return (
     <main className="app-shell">
@@ -94,7 +155,7 @@ export default function Home() {
           </p>
           <h1>AI PR Review Assistant</h1>
         </div>
-        <span className="stage-badge">PR 1 初始化版本</span>
+        <span className="stage-badge">PR 2 数据获取版本</span>
       </header>
 
       <section className="workspace" aria-label="AI PR Review 工作台">
@@ -103,11 +164,11 @@ export default function Home() {
             <SearchCheck size={24} aria-hidden="true" />
             <div>
               <h2>输入 Pull Request 链接</h2>
-              <p>当前版本先提供评审入口和结果区域，后续 PR 将接入真实 GitHub 数据与 AI 分析。</p>
+              <p>系统会解析 PR URL，并从 GitHub 获取标题、作者、增删行和变更文件列表。</p>
             </div>
           </div>
 
-          <div className="input-panel" aria-label="PR 分析入口">
+          <form className="input-panel" aria-label="PR 分析入口" onSubmit={handleAnalyzeSubmit}>
             <label htmlFor="pr-url">GitHub PR URL</label>
             <div className="input-row">
               <input
@@ -116,17 +177,23 @@ export default function Home() {
                 value={prUrl}
                 onChange={(event) => setPrUrl(event.target.value)}
                 placeholder="https://github.com/owner/repo/pull/123"
+                disabled={isLoading}
               />
-              <button type="button" onClick={handleAnalyzeClick}>
-                <GitPullRequestArrow size={18} aria-hidden="true" />
-                开始分析
+              <button type="submit" disabled={isLoading}>
+                {isLoading ? (
+                  <Loader2 className="spin" size={18} aria-hidden="true" />
+                ) : (
+                  <GitPullRequestArrow size={18} aria-hidden="true" />
+                )}
+                {isLoading ? "获取中" : "开始分析"}
               </button>
             </div>
             <p className={`input-state ${inputState.tone}`}>
               <strong>{inputState.label}</strong>
               <span>{inputState.message}</span>
             </p>
-          </div>
+            {error ? <p className="error-message">{error}</p> : null}
+          </form>
         </div>
 
         <aside className="workflow-panel" aria-label="AI Review 工作流预览">
@@ -142,31 +209,97 @@ export default function Home() {
         </aside>
       </section>
 
-      <section className="review-layout" id="review-preview" aria-label="评审能力预览">
+      <section className="review-layout" id="review-preview" aria-label="PR 数据预览">
         <div className="section-heading">
           <p className="eyebrow dark">
             <ShieldCheck size={16} aria-hidden="true" />
-            PR 1 capability preview
+            GitHub PR context
           </p>
-          <h2>核心评审区域已预留</h2>
+          <h2>{pr ? pr.title : "等待获取 Pull Request 数据"}</h2>
           <p>
-            当前版本先建立稳定页面结构。后续 PR 会逐步接入 GitHub 数据获取、AI 总结、风险检测和可复制 Review 建议。
+            {pr
+              ? `已获取 ${pr.owner}/${pr.repo} #${pr.number} 的基础信息和 ${files.length} 个变更文件。`
+              : "当前区域会展示真实 PR 信息。PR 3 将基于这些上下文生成 AI 变更总结。"}
           </p>
         </div>
 
-        <div className="review-grid">
-          {reviewSections.map((section) => {
-            const Icon = section.icon;
+        {pr ? (
+          <>
+            <div className="pr-summary">
+              <div>
+                <span>作者</span>
+                <strong>{pr.author}</strong>
+              </div>
+              <div>
+                <span>状态</span>
+                <strong>{pr.state}</strong>
+              </div>
+              <div>
+                <span>增删行</span>
+                <strong>
+                  +{pr.additions} / -{pr.deletions}
+                </strong>
+              </div>
+              <div>
+                <span>文件数</span>
+                <strong>{pr.changedFiles}</strong>
+              </div>
+            </div>
 
-            return (
-              <article className="review-card" key={section.title}>
-                <Icon size={24} aria-hidden="true" />
-                <h3>{section.title}</h3>
-                <p>{section.description}</p>
-              </article>
-            );
-          })}
-        </div>
+            <div className="pr-meta">
+              <p>
+                <strong>更新时间：</strong>
+                {formatDate(pr.updatedAt)}
+              </p>
+              <a href={pr.htmlUrl} target="_blank" rel="noreferrer">
+                在 GitHub 打开
+                <ExternalLink size={15} aria-hidden="true" />
+              </a>
+            </div>
+
+            <div className="pr-body">
+              <h3>PR 描述</h3>
+              <p>{pr.body || "该 PR 没有填写描述。"}</p>
+            </div>
+
+            <div className="files-panel">
+              <div className="files-heading">
+                <FileCode2 size={20} aria-hidden="true" />
+                <h3>变更文件</h3>
+              </div>
+              <div className="file-list">
+                {files.map((file) => (
+                  <details className="file-item" key={file.filename}>
+                    <summary>
+                      <span className="file-name">{file.filename}</span>
+                      <span className={`file-status ${file.status}`}>
+                        {getFileStatusLabel(file.status)}
+                      </span>
+                      <span className="file-changes">
+                        +{file.additions} / -{file.deletions}
+                      </span>
+                    </summary>
+                    <pre>{truncatePatch(file.patch)}</pre>
+                  </details>
+                ))}
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="review-grid">
+            {reviewSections.map((section) => {
+              const Icon = section.icon;
+
+              return (
+                <article className="review-card" key={section.title}>
+                  <Icon size={24} aria-hidden="true" />
+                  <h3>{section.title}</h3>
+                  <p>{section.description}</p>
+                </article>
+              );
+            })}
+          </div>
+        )}
       </section>
     </main>
   );
