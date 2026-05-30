@@ -9,15 +9,25 @@ import {
   FileCode2,
   FileSearch,
   GitPullRequestArrow,
+  History,
   Loader2,
   MessageSquareText,
   SearchCheck,
   Settings,
   ShieldCheck,
   Sparkles,
+  Trash2,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
+import {
+  buildHistoryRecord,
+  findHistoryByRepository,
+  getRepositoryKey,
+  groupHistoryByRepository,
+  HISTORY_STORAGE_KEY,
+  upsertHistoryRecord,
+} from "@/lib/history-store";
 
 const reviewSections = [
   {
@@ -45,6 +55,37 @@ const workflowSteps = [
 ];
 
 const defaultModelOptions = ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"];
+const HISTORY_STORE_EVENT = "ai-pr-review-history-updated";
+
+function subscribeHistoryStore(callback) {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+
+  window.addEventListener("storage", callback);
+  window.addEventListener(HISTORY_STORE_EVENT, callback);
+
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener(HISTORY_STORE_EVENT, callback);
+  };
+}
+
+function getHistorySnapshot() {
+  if (typeof window === "undefined") {
+    return "[]";
+  }
+
+  try {
+    return window.localStorage.getItem(HISTORY_STORAGE_KEY) || "[]";
+  } catch {
+    return "[]";
+  }
+}
+
+function getServerHistorySnapshot() {
+  return "[]";
+}
 
 function getInputState(prUrl) {
   if (!prUrl.trim()) {
@@ -135,13 +176,77 @@ export default function Home() {
   const [isModelConfigLoading, setIsModelConfigLoading] = useState(false);
   const [isModelConfigSaving, setIsModelConfigSaving] = useState(false);
   const [isModelListLoading, setIsModelListLoading] = useState(false);
+  const [selectedHistoryRecord, setSelectedHistoryRecord] = useState(null);
+  const [historyMessage, setHistoryMessage] = useState("");
 
+  const pr = pullRequestData?.pr;
+  const files = useMemo(() => pullRequestData?.files || [], [pullRequestData]);
+  const historySnapshot = useSyncExternalStore(
+    subscribeHistoryStore,
+    getHistorySnapshot,
+    getServerHistorySnapshot,
+  );
+  const historyRecords = useMemo(() => {
+    /**
+     * localStorage 只用于本地演示和当前浏览器保存，不是团队共享存储。
+     * 这里把外部存储快照转换成 React 可渲染数据，解析失败时直接降级为空列表。
+     */
+    try {
+      const parsedHistory = JSON.parse(historySnapshot);
+      return Array.isArray(parsedHistory) ? parsedHistory : [];
+    } catch {
+      return [];
+    }
+  }, [historySnapshot]);
   const inputState = useMemo(() => getInputState(prUrl), [prUrl]);
+  const groupedHistoryRecords = useMemo(() => groupHistoryByRepository(historyRecords), [historyRecords]);
+  const currentRepositoryHistory = useMemo(() => {
+    if (!pr) {
+      return [];
+    }
+
+    return findHistoryByRepository(historyRecords, getRepositoryKey(pr));
+  }, [historyRecords, pr]);
   const visibleReviewSuggestions = useMemo(() => {
     const suggestions = reviewResult?.suggestions || [];
 
     return showLowConfidence ? suggestions : suggestions.filter((suggestion) => suggestion.confidence >= 0.5);
   }, [reviewResult, showLowConfidence]);
+
+  function saveHistorySnapshot({
+    nextPullRequestData = pullRequestData,
+    nextSummary = summary,
+    nextRiskResult = riskResult,
+    nextReviewResult = reviewResult,
+  } = {}) {
+    if (!nextPullRequestData?.pr || typeof window === "undefined") {
+      return;
+    }
+
+    const record = buildHistoryRecord(
+      nextPullRequestData.pr,
+      nextPullRequestData.files || [],
+      nextSummary,
+      nextRiskResult?.risks || [],
+      nextReviewResult?.suggestions || [],
+    );
+    const nextRecords = upsertHistoryRecord(historyRecords, record);
+
+    /**
+     * 每次分析结果变化后都写回 localStorage，并主动派发事件通知页面刷新历史列表。
+     * 这样可以保存分阶段产生的上下文摘要，同时避免在 effect 里做级联状态更新。
+     */
+    try {
+      window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(nextRecords));
+      window.dispatchEvent(new Event(HISTORY_STORE_EVENT));
+      setHistoryMessage(`已更新 ${record.repositoryKey} #${record.prNumber} 的本地历史记录。`);
+    } catch {
+      setHistoryMessage("本地历史记录保存失败，可能是浏览器存储空间不足。");
+      return;
+    }
+
+    setSelectedHistoryRecord(record);
+  }
 
   async function loadModelConfig() {
     setIsModelConfigLoading(true);
@@ -294,6 +399,12 @@ export default function Home() {
       }
 
       setPullRequestData(data);
+      saveHistorySnapshot({
+        nextPullRequestData: data,
+        nextSummary: null,
+        nextRiskResult: null,
+        nextReviewResult: null,
+      });
       document.getElementById("review-preview")?.scrollIntoView({
         behavior: "smooth",
         block: "start",
@@ -336,6 +447,10 @@ export default function Home() {
       }
 
       setSummary(data.summary);
+      saveHistorySnapshot({
+        nextSummary: data.summary,
+        nextReviewResult: null,
+      });
     } catch (requestError) {
       setSummaryError(requestError.message);
     } finally {
@@ -374,6 +489,10 @@ export default function Home() {
       }
 
       setRiskResult(data);
+      saveHistorySnapshot({
+        nextRiskResult: data,
+        nextReviewResult: null,
+      });
     } catch (requestError) {
       setRiskError(requestError.message);
     } finally {
@@ -414,6 +533,9 @@ export default function Home() {
       }
 
       setReviewResult(data);
+      saveHistorySnapshot({
+        nextReviewResult: data,
+      });
     } catch (requestError) {
       setReviewError(requestError.message);
     } finally {
@@ -438,8 +560,27 @@ export default function Home() {
     }
   }
 
-  const pr = pullRequestData?.pr;
-  const files = pullRequestData?.files || [];
+  function handleClearHistory() {
+    if (!historyRecords.length) {
+      return;
+    }
+
+    const confirmed = window.confirm("确定要清空本地历史记录吗？该操作只会清除当前浏览器中的记录。");
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      window.localStorage.removeItem(HISTORY_STORAGE_KEY);
+      window.dispatchEvent(new Event(HISTORY_STORE_EVENT));
+    } catch {
+      // 清空状态仍然可以完成，localStorage 异常只影响浏览器持久化结果。
+    }
+
+    setSelectedHistoryRecord(null);
+    setHistoryMessage("已清空当前浏览器中的本地历史记录。");
+  }
 
   return (
     <main className="app-shell">
@@ -638,6 +779,71 @@ export default function Home() {
         </aside>
       </section>
 
+      <section className="history-panel" aria-label="本地 PR 分析历史记录">
+        <div className="history-header">
+          <div>
+            <p className="eyebrow dark">
+              <History size={16} aria-hidden="true" />
+              Local review context
+            </p>
+            <h2>历史记录</h2>
+            <p>按仓库保存当前浏览器中过去分析过的 PR 摘要，用于说明系统如何积累本地上下文。</p>
+          </div>
+          <button type="button" className="clear-history-button" onClick={handleClearHistory} disabled={!historyRecords.length}>
+            <Trash2 size={16} aria-hidden="true" />
+            清空历史
+          </button>
+        </div>
+
+        {currentRepositoryHistory.length > 1 ? (
+          <p className="history-message">
+            已发现该仓库有 {currentRepositoryHistory.length} 条本地分析记录，后续可用于同仓库 PR 上下文对比。
+          </p>
+        ) : null}
+        {historyMessage ? <p className="history-message">{historyMessage}</p> : null}
+
+        {historyRecords.length > 0 ? (
+          <div className="history-content">
+            <div className="history-groups">
+              {Object.entries(groupedHistoryRecords).map(([repositoryKey, records]) => (
+                <div className="history-group" key={repositoryKey}>
+                  <div className="history-group-title">
+                    <strong>{repositoryKey}</strong>
+                    <span>{records.length} 条记录</span>
+                  </div>
+                  <div className="history-list">
+                    {records.map((record) => (
+                      <button
+                        type="button"
+                        className={`history-item ${
+                          selectedHistoryRecord?.repositoryKey === record.repositoryKey &&
+                          selectedHistoryRecord?.prNumber === record.prNumber
+                            ? "active"
+                            : ""
+                        }`}
+                        key={`${record.repositoryKey}-${record.prNumber}`}
+                        onClick={() => setSelectedHistoryRecord(record)}
+                      >
+                        <span>
+                          #{record.prNumber} {record.title}
+                        </span>
+                        <small>
+                          {formatDate(record.analyzedAt)} · +{record.additions} / -{record.deletions} · {record.changedFiles} 文件
+                        </small>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <HistoryRecordDetail record={selectedHistoryRecord} />
+          </div>
+        ) : (
+          <p className="summary-empty">还没有本地历史记录。分析一个 GitHub PR 后，这里会显示按仓库归类的历史摘要。</p>
+        )}
+      </section>
+
       <section className="review-layout" id="review-preview" aria-label="PR 数据预览">
         <div className="section-heading">
           <p className="eyebrow dark">
@@ -791,6 +997,61 @@ export default function Home() {
         )}
       </section>
     </main>
+  );
+}
+
+function HistoryRecordDetail({ record }) {
+  if (!record) {
+    return (
+      <div className="history-detail">
+        <p className="summary-empty">选择左侧某条历史记录后，可以查看该 PR 的总结、风险数量、建议数量和关键文件摘要。</p>
+      </div>
+    );
+  }
+
+  const riskCount = record.risks?.length || 0;
+  const suggestionCount = record.suggestions?.length || 0;
+
+  return (
+    <div className="history-detail">
+      <div className="history-detail-header">
+        <div>
+          <span>{record.repositoryKey}</span>
+          <h3>
+            #{record.prNumber} {record.title}
+          </h3>
+        </div>
+        {record.prUrl ? (
+          <a href={record.prUrl} target="_blank" rel="noreferrer">
+            GitHub
+            <ExternalLink size={14} aria-hidden="true" />
+          </a>
+        ) : null}
+      </div>
+      <div className="history-detail-meta">
+        <span>{formatDate(record.analyzedAt)}</span>
+        <span>{riskCount} 个风险</span>
+        <span>{suggestionCount} 条建议</span>
+      </div>
+      <p className="history-overview">{record.summary?.overview || "该记录暂未生成 AI 变更总结。"}</p>
+      <div className="history-digest">
+        <h4>关键文件摘要</h4>
+        {record.patchDigest?.length ? (
+          <ul>
+            {record.patchDigest.map((file) => (
+              <li key={file.filename}>
+                <strong>{file.filename}</strong>
+                <span>
+                  {getFileStatusLabel(file.status)} · {file.changes} 行变更
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="summary-empty">暂无关键文件摘要。</p>
+        )}
+      </div>
+    </div>
   );
 }
 
