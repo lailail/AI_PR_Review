@@ -177,6 +177,7 @@ export default function Home() {
   const [isModelConfigSaving, setIsModelConfigSaving] = useState(false);
   const [isModelListLoading, setIsModelListLoading] = useState(false);
   const [selectedHistoryRecord, setSelectedHistoryRecord] = useState(null);
+  const [selectedHistoryRepositoryKey, setSelectedHistoryRepositoryKey] = useState("");
   const [historyMessage, setHistoryMessage] = useState("");
 
   const pr = pullRequestData?.pr;
@@ -200,6 +201,16 @@ export default function Home() {
   }, [historySnapshot]);
   const inputState = useMemo(() => getInputState(prUrl), [prUrl]);
   const groupedHistoryRecords = useMemo(() => groupHistoryByRepository(historyRecords), [historyRecords]);
+  const historyRepositoryKeys = useMemo(() => Object.keys(groupedHistoryRecords), [groupedHistoryRecords]);
+  const activeHistoryRepositoryKey =
+    selectedHistoryRepositoryKey ||
+    selectedHistoryRecord?.repositoryKey ||
+    (pr ? getRepositoryKey(pr) : "") ||
+    historyRepositoryKeys[0] ||
+    "";
+  const activeRepositoryRecords = activeHistoryRepositoryKey
+    ? groupedHistoryRecords[activeHistoryRepositoryKey] || []
+    : [];
   const currentRepositoryHistory = useMemo(() => {
     if (!pr) {
       return [];
@@ -207,11 +218,54 @@ export default function Home() {
 
     return findHistoryByRepository(historyRecords, getRepositoryKey(pr));
   }, [historyRecords, pr]);
+  const displayedPr = useMemo(() => {
+    if (!selectedHistoryRecord) {
+      return pr;
+    }
+
+    return {
+      number: selectedHistoryRecord.prNumber,
+      title: selectedHistoryRecord.title,
+      author: selectedHistoryRecord.author,
+      state: "history",
+      htmlUrl: selectedHistoryRecord.prUrl,
+      updatedAt: selectedHistoryRecord.analyzedAt,
+      body: "该内容来自浏览器本地历史记录，只保存分析摘要和截断后的关键文件片段。",
+      additions: selectedHistoryRecord.additions,
+      deletions: selectedHistoryRecord.deletions,
+      changedFiles: selectedHistoryRecord.changedFiles,
+      owner: selectedHistoryRecord.repositoryKey.split("/")[0],
+      repo: selectedHistoryRecord.repositoryKey.split("/").slice(1).join("/"),
+    };
+  }, [pr, selectedHistoryRecord]);
+  const displayedSummary = selectedHistoryRecord ? selectedHistoryRecord.summary : summary;
+  const displayedRiskResult = useMemo(
+    () => (selectedHistoryRecord ? { risks: selectedHistoryRecord.risks || [], ruleSignals: [] } : riskResult),
+    [riskResult, selectedHistoryRecord],
+  );
+  const displayedReviewResult = useMemo(
+    () => (selectedHistoryRecord ? { suggestions: selectedHistoryRecord.suggestions || [], markdown: "" } : reviewResult),
+    [reviewResult, selectedHistoryRecord],
+  );
+  const displayedFiles = useMemo(
+    () =>
+      selectedHistoryRecord
+        ? (selectedHistoryRecord.patchDigest || []).map((file) => ({
+        filename: file.filename,
+        status: file.status,
+        changes: file.changes,
+        additions: 0,
+        deletions: 0,
+        patch: file.excerpt,
+      }))
+        : files,
+    [files, selectedHistoryRecord],
+  );
   const visibleReviewSuggestions = useMemo(() => {
-    const suggestions = reviewResult?.suggestions || [];
+    const suggestions = displayedReviewResult?.suggestions || [];
 
     return showLowConfidence ? suggestions : suggestions.filter((suggestion) => suggestion.confidence >= 0.5);
-  }, [reviewResult, showLowConfidence]);
+  }, [displayedReviewResult, showLowConfidence]);
 
   function saveHistorySnapshot({
     nextPullRequestData = pullRequestData,
@@ -246,6 +300,7 @@ export default function Home() {
     }
 
     setSelectedHistoryRecord(record);
+    setSelectedHistoryRepositoryKey(record.repositoryKey);
   }
 
   async function loadModelConfig() {
@@ -382,6 +437,7 @@ export default function Home() {
     setReviewError("");
     setCopyStatus("");
     setPullRequestData(null);
+    setSelectedHistoryRecord(null);
     setIsLoading(true);
 
     try {
@@ -579,6 +635,7 @@ export default function Home() {
     }
 
     setSelectedHistoryRecord(null);
+    setSelectedHistoryRepositoryKey("");
     setHistoryMessage("已清空当前浏览器中的本地历史记录。");
   }
 
@@ -805,36 +862,57 @@ export default function Home() {
         {historyRecords.length > 0 ? (
           <div className="history-content">
             <div className="history-groups">
-              {Object.entries(groupedHistoryRecords).map(([repositoryKey, records]) => (
-                <div className="history-group" key={repositoryKey}>
-                  <div className="history-group-title">
-                    <strong>{repositoryKey}</strong>
-                    <span>{records.length} 条记录</span>
-                  </div>
-                  <div className="history-list">
-                    {records.map((record) => (
-                      <button
-                        type="button"
-                        className={`history-item ${
-                          selectedHistoryRecord?.repositoryKey === record.repositoryKey &&
-                          selectedHistoryRecord?.prNumber === record.prNumber
-                            ? "active"
-                            : ""
-                        }`}
-                        key={`${record.repositoryKey}-${record.prNumber}`}
-                        onClick={() => setSelectedHistoryRecord(record)}
-                      >
-                        <span>
-                          #{record.prNumber} {record.title}
-                        </span>
-                        <small>
-                          {formatDate(record.analyzedAt)} · +{record.additions} / -{record.deletions} · {record.changedFiles} 文件
-                        </small>
-                      </button>
-                    ))}
-                  </div>
+              <label className="history-repository-select">
+                选择仓库
+                <select
+                  value={activeHistoryRepositoryKey}
+                  onChange={(event) => {
+                    const repositoryKey = event.target.value;
+                    const firstRecord = groupedHistoryRecords[repositoryKey]?.[0] || null;
+
+                    setSelectedHistoryRepositoryKey(repositoryKey);
+                    setSelectedHistoryRecord(firstRecord);
+                  }}
+                >
+                  {historyRepositoryKeys.map((repositoryKey) => (
+                    <option value={repositoryKey} key={repositoryKey}>
+                      {repositoryKey}（{groupedHistoryRecords[repositoryKey].length}）
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="history-group">
+                <div className="history-group-title">
+                  <strong>{activeHistoryRepositoryKey}</strong>
+                  <span>{activeRepositoryRecords.length} 条记录</span>
                 </div>
-              ))}
+                <div className="history-list" aria-label="当前仓库历史 PR 列表">
+                  {activeRepositoryRecords.map((record) => (
+                    <button
+                      type="button"
+                      className={`history-item ${
+                        selectedHistoryRecord?.repositoryKey === record.repositoryKey &&
+                        selectedHistoryRecord?.prNumber === record.prNumber
+                          ? "active"
+                          : ""
+                      }`}
+                      key={`${record.repositoryKey}-${record.prNumber}`}
+                      onClick={() => {
+                        setSelectedHistoryRepositoryKey(record.repositoryKey);
+                        setSelectedHistoryRecord(record);
+                      }}
+                    >
+                      <span>
+                        #{record.prNumber} {record.title}
+                      </span>
+                      <small>
+                        {formatDate(record.analyzedAt)} · +{record.additions} / -{record.deletions} · {record.changedFiles} 文件
+                      </small>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             <HistoryRecordDetail record={selectedHistoryRecord} />
@@ -850,51 +928,53 @@ export default function Home() {
             <ShieldCheck size={16} aria-hidden="true" />
             GitHub PR context
           </p>
-          <h2>{pr ? pr.title : "等待获取 Pull Request 数据"}</h2>
+          <h2>{displayedPr ? displayedPr.title : "等待获取 Pull Request 数据"}</h2>
           <p>
-            {pr
-              ? `已获取 ${pr.owner}/${pr.repo} #${pr.number} 的基础信息和 ${files.length} 个变更文件。`
+            {displayedPr
+              ? selectedHistoryRecord
+                ? `正在查看 ${displayedPr.owner}/${displayedPr.repo} #${displayedPr.number} 的本地历史分析摘要。`
+                : `已获取 ${displayedPr.owner}/${displayedPr.repo} #${displayedPr.number} 的基础信息和 ${displayedFiles.length} 个变更文件。`
               : "当前区域会展示真实 PR 信息。获取成功后可生成 DeepSeek 总结、风险识别和 Review 建议。"}
           </p>
         </div>
 
-        {pr ? (
+        {displayedPr ? (
           <>
             <div className="pr-summary">
               <div>
                 <span>作者</span>
-                <strong>{pr.author}</strong>
+                <strong>{displayedPr.author}</strong>
               </div>
               <div>
                 <span>状态</span>
-                <strong>{pr.state}</strong>
+                <strong>{selectedHistoryRecord ? "历史记录" : displayedPr.state}</strong>
               </div>
               <div>
                 <span>增删行</span>
                 <strong>
-                  +{pr.additions} / -{pr.deletions}
+                  +{displayedPr.additions} / -{displayedPr.deletions}
                 </strong>
               </div>
               <div>
                 <span>文件数</span>
-                <strong>{pr.changedFiles}</strong>
+                <strong>{displayedPr.changedFiles}</strong>
               </div>
             </div>
 
             <div className="pr-meta">
               <p>
-                <strong>更新时间：</strong>
-                {formatDate(pr.updatedAt)}
+                <strong>{selectedHistoryRecord ? "分析时间：" : "更新时间："}</strong>
+                {formatDate(displayedPr.updatedAt)}
               </p>
-              <a href={pr.htmlUrl} target="_blank" rel="noreferrer">
+              <a href={displayedPr.htmlUrl} target="_blank" rel="noreferrer">
                 在 GitHub 打开
                 <ExternalLink size={15} aria-hidden="true" />
               </a>
             </div>
 
             <div className="pr-body">
-              <h3>PR 描述</h3>
-              <p>{pr.body || "该 PR 没有填写描述。"}</p>
+              <h3>{selectedHistoryRecord ? "历史记录说明" : "PR 描述"}</h3>
+              <p>{displayedPr.body || "该 PR 没有填写描述。"}</p>
             </div>
 
             <div className="ai-summary-panel">
@@ -902,19 +982,21 @@ export default function Home() {
                 <MessageSquareText size={20} aria-hidden="true" />
                 <h3>AI 变更总结</h3>
               </div>
-              {summaryError ? <p className="error-message">{summaryError}</p> : null}
-              {summary ? (
+              {!selectedHistoryRecord && summaryError ? <p className="error-message">{summaryError}</p> : null}
+              {displayedSummary ? (
                 <div className="summary-result">
-                  <p className="summary-overview">{summary.overview}</p>
-                  <SummaryList title="业务变化" items={summary.businessChanges} />
-                  <SummaryList title="技术变化" items={summary.technicalChanges} />
-                  <SummaryList title="测试变化" items={summary.testChanges} />
-                  <SummaryList title="影响范围" items={summary.impactScope} />
-                  <SummaryList title="Review 关注点" items={summary.reviewFocus} />
+                  <p className="summary-overview">{displayedSummary.overview}</p>
+                  <SummaryList title="业务变化" items={displayedSummary.businessChanges} />
+                  <SummaryList title="技术变化" items={displayedSummary.technicalChanges} />
+                  <SummaryList title="测试变化" items={displayedSummary.testChanges} />
+                  <SummaryList title="影响范围" items={displayedSummary.impactScope} />
+                  <SummaryList title="Review 关注点" items={displayedSummary.reviewFocus} />
                 </div>
               ) : (
                 <p className="summary-empty">
-                  点击“生成变更总结”后，这里会展示 DeepSeek 基于当前 PR 上下文生成的结构化摘要。
+                  {selectedHistoryRecord
+                    ? "这条历史记录暂未保存 AI 变更总结。"
+                    : "点击“生成变更总结”后，这里会展示 DeepSeek 基于当前 PR 上下文生成的结构化摘要。"}
                 </p>
               )}
             </div>
@@ -924,12 +1006,14 @@ export default function Home() {
                 <AlertTriangle size={20} aria-hidden="true" />
                 <h3>风险代码识别</h3>
               </div>
-              {riskError ? <p className="error-message">{riskError}</p> : null}
-              {riskResult ? (
-                <RiskDetectionResult risks={riskResult.risks} ruleSignals={riskResult.ruleSignals} />
+              {!selectedHistoryRecord && riskError ? <p className="error-message">{riskError}</p> : null}
+              {displayedRiskResult ? (
+                <RiskDetectionResult risks={displayedRiskResult.risks} ruleSignals={displayedRiskResult.ruleSignals} />
               ) : (
                 <p className="summary-empty">
-                  点击“识别风险代码”后，这里会展示风险等级、证据、原因、建议和置信度。
+                  {selectedHistoryRecord
+                    ? "这条历史记录暂未保存风险识别结果。"
+                    : "点击“识别风险代码”后，这里会展示风险等级、证据、原因、建议和置信度。"}
                 </p>
               )}
             </div>
@@ -939,12 +1023,12 @@ export default function Home() {
                 <ClipboardCheck size={20} aria-hidden="true" />
                 <h3>Review 建议</h3>
               </div>
-              {reviewError ? <p className="error-message">{reviewError}</p> : null}
-              {reviewResult ? (
+              {!selectedHistoryRecord && reviewError ? <p className="error-message">{reviewError}</p> : null}
+              {displayedReviewResult ? (
                 <ReviewSuggestionResult
                   suggestions={visibleReviewSuggestions}
-                  totalCount={reviewResult.suggestions.length}
-                  markdown={reviewResult.markdown}
+                  totalCount={displayedReviewResult.suggestions.length}
+                  markdown={displayedReviewResult.markdown}
                   showLowConfidence={showLowConfidence}
                   copyStatus={copyStatus}
                   onToggleLowConfidence={() => setShowLowConfidence((value) => !value)}
@@ -952,7 +1036,9 @@ export default function Home() {
                 />
               ) : (
                 <p className="summary-empty">
-                  点击“生成 Review 建议”后，这里会展示可复制的结构化 Review 建议。
+                  {selectedHistoryRecord
+                    ? "这条历史记录暂未保存 Review 建议。"
+                    : "点击“生成 Review 建议”后，这里会展示可复制的结构化 Review 建议。"}
                 </p>
               )}
             </div>
@@ -960,10 +1046,10 @@ export default function Home() {
             <div className="files-panel">
               <div className="files-heading">
                 <FileCode2 size={20} aria-hidden="true" />
-                <h3>变更文件</h3>
+                <h3>{selectedHistoryRecord ? "关键文件摘要" : "变更文件"}</h3>
               </div>
               <div className="file-list">
-                {files.map((file) => (
+                {displayedFiles.map((file) => (
                   <details className="file-item" key={file.filename}>
                     <summary>
                       <span className="file-name">{file.filename}</span>
@@ -971,7 +1057,7 @@ export default function Home() {
                         {getFileStatusLabel(file.status)}
                       </span>
                       <span className="file-changes">
-                        +{file.additions} / -{file.deletions}
+                        {selectedHistoryRecord ? `${file.changes} 行摘要` : `+${file.additions} / -${file.deletions}`}
                       </span>
                     </summary>
                     <pre>{truncatePatch(file.patch)}</pre>
