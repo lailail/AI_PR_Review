@@ -5,6 +5,7 @@ import {
   findHistoryByRepository,
   getRepositoryKey,
   groupHistoryByRepository,
+  normalizeHistoryRecords,
   upsertHistoryRecord,
 } from "../lib/history-store";
 
@@ -91,6 +92,27 @@ describe("history-store", () => {
     expect(record.patchDigest[0]).not.toHaveProperty("patch");
   });
 
+  test("handles empty files and missing patch when building patch digest", () => {
+    expect(buildPatchDigest()).toEqual([]);
+
+    expect(
+      buildPatchDigest([
+        {
+          filename: "public/logo.png",
+          status: "modified",
+          changes: 1,
+        },
+      ]),
+    ).toEqual([
+      {
+        filename: "public/logo.png",
+        status: "modified",
+        changes: 1,
+        excerpt: "",
+      },
+    ]);
+  });
+
   test("overwrites old history when repository and PR number are the same", () => {
     const oldRecord = {
       repositoryKey: "lailail/AI_PR_Review",
@@ -145,5 +167,39 @@ describe("history-store", () => {
       { repositoryKey: "owner/repo-a", prNumber: 1 },
       { repositoryKey: "owner/repo-a", prNumber: 3 },
     ]);
+  });
+
+  test("normalizes persisted history and removes invalid records", () => {
+    const validRecord = {
+      repositoryKey: "owner/repo-a",
+      prNumber: 1,
+      title: "有效记录",
+      analyzedAt: "2026-05-30T10:00:00.000Z",
+      patchDigest: [{ filename: "app/page.js", excerpt: "@@ -1 +1 @@" }],
+    };
+
+    expect(
+      normalizeHistoryRecords([
+        validRecord,
+        null,
+        { repositoryKey: "", prNumber: 2 },
+        { repositoryKey: "owner/repo-b", prNumber: "bad" },
+        { repositoryKey: "owner/repo-c", prNumber: 3, patchDigest: "bad" },
+      ]),
+    ).toEqual([
+      {
+        ...validRecord,
+        author: "unknown",
+        additions: 0,
+        changedFiles: 0,
+        deletions: 0,
+        prUrl: "",
+        risks: [],
+        suggestions: [],
+        summary: null,
+      },
+    ]);
+
+    expect(normalizeHistoryRecords({ repositoryKey: "owner/repo" })).toEqual([]);
   });
 });

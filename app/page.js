@@ -26,6 +26,7 @@ import {
   getRepositoryKey,
   groupHistoryByRepository,
   HISTORY_STORAGE_KEY,
+  normalizeHistoryRecords,
   upsertHistoryRecord,
 } from "@/lib/history-store";
 
@@ -193,8 +194,7 @@ export default function Home() {
      * 这里把外部存储快照转换成 React 可渲染数据，解析失败时直接降级为空列表。
      */
     try {
-      const parsedHistory = JSON.parse(historySnapshot);
-      return Array.isArray(parsedHistory) ? parsedHistory : [];
+      return normalizeHistoryRecords(JSON.parse(historySnapshot));
     } catch {
       return [];
     }
@@ -603,13 +603,13 @@ export default function Home() {
    * 复制 Markdown Review 结果。
    * 复制动作依赖浏览器剪贴板权限，失败时给出明确提示，避免用户误以为已经复制成功。
    */
-  async function handleCopyReviewMarkdown() {
-    if (!reviewResult?.markdown) {
+  async function handleCopyReviewMarkdown(markdownContent = reviewResult?.markdown) {
+    if (!markdownContent) {
       return;
     }
 
     try {
-      await navigator.clipboard.writeText(reviewResult.markdown);
+      await navigator.clipboard.writeText(markdownContent);
       setCopyStatus("已复制 Markdown Review 结果。");
     } catch {
       setCopyStatus("复制失败，请手动选择 Markdown 内容复制。");
@@ -1164,6 +1164,7 @@ function ReviewSuggestionResult({
   onCopyMarkdown,
 }) {
   const hiddenCount = Math.max(totalCount - suggestions.length, 0);
+  const effectiveMarkdown = markdown || formatSuggestionMarkdownPreview(suggestions);
 
   return (
     <div className="review-suggestion-result">
@@ -1172,7 +1173,7 @@ function ReviewSuggestionResult({
           <input type="checkbox" checked={showLowConfidence} onChange={onToggleLowConfidence} />
           显示低置信度建议
         </label>
-        <button type="button" className="copy-button" onClick={onCopyMarkdown} disabled={!markdown}>
+        <button type="button" className="copy-button" onClick={() => onCopyMarkdown(effectiveMarkdown)} disabled={!effectiveMarkdown}>
           {copyStatus.startsWith("已复制") ? (
             <CheckCircle2 size={17} aria-hidden="true" />
           ) : (
@@ -1212,10 +1213,38 @@ function ReviewSuggestionResult({
 
       <details className="markdown-preview">
         <summary>查看 Markdown 预览</summary>
-        <pre>{markdown}</pre>
+        <pre>{effectiveMarkdown || "暂无可预览的 Markdown 内容。"}</pre>
       </details>
     </div>
   );
+}
+
+function formatSuggestionMarkdownPreview(suggestions = []) {
+  if (!suggestions.length) {
+    return "";
+  }
+
+  /**
+   * 历史记录只保存结构化 suggestions，不一定保存服务端生成的 markdown。
+   * 这里在前端兜底生成一份可复制预览，避免用户展开“Markdown 预览”时看到空白。
+   */
+  return [
+    "## AI Review 建议",
+    "",
+    ...suggestions.flatMap((suggestion, index) => [
+      `### ${index + 1}. ${getSeverityLabel(suggestion.severity)}：${suggestion.file || "未知文件"}${
+        suggestion.line ? `:${suggestion.line}` : ""
+      }`,
+      "",
+      `- 问题：${suggestion.problem || "未提供问题描述"}`,
+      `- 建议：${suggestion.suggestion || "未提供修复建议"}`,
+      `- 置信度：${Math.round((suggestion.confidence || 0) * 100)}%`,
+      suggestion.confidence < 0.5 ? "- 备注：低置信度，需要人工确认。" : "",
+      "",
+    ]),
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function RiskDetectionResult({ risks = [], ruleSignals = [] }) {
