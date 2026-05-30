@@ -55,6 +55,8 @@ GITHUB_TOKEN=your_github_token
 DEEPSEEK_API_KEY=your_deepseek_api_key
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_CONTEXT_API_KEY=
+DEEPSEEK_CONTEXT_MODEL=deepseek-v4-pro
 ```
 
 启动开发服务：
@@ -87,14 +89,20 @@ DEEPSEEK_API_KEY=your_deepseek_api_key
 
 `.env.local` 已在 `.gitignore` 中忽略，不能提交到 GitHub。仓库中只提交 `.env.local.example`，用于说明需要哪些环境变量。
 
+如果其他人下载本项目代码，需要自己复制 `.env.local.example` 并创建本地 `.env.local` 文件，然后填写自己的 API Key。真实 Key 不会也不应该出现在 GitHub 仓库中。
+
 默认配置：
 
 ```text
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_CONTEXT_API_KEY=
+DEEPSEEK_CONTEXT_MODEL=deepseek-v4-pro
 ```
 
 前端不会读取 DeepSeek API Key，只会调用本项目的 `/api/ai-summary`、`/api/risk-detection` 和 `/api/review-suggestions` 后端接口。
+
+页面右上角提供“模型配置”入口，用于本地演示时切换 DeepSeek API Key 和模型。用户填写 API Key 后可以点击“获取模型”，系统会调用 DeepSeek `/models` 接口获取该 Key 可用的模型列表，再从下拉框中选择模型。该功能会通过后端写入本地 `.env.local`，只适合本地开发环境；如果部署到公网服务器，不应该开放给未授权用户修改。
 
 ## 可用命令
 

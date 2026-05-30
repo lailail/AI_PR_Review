@@ -12,8 +12,10 @@ import {
   Loader2,
   MessageSquareText,
   SearchCheck,
+  Settings,
   ShieldCheck,
   Sparkles,
+  X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -41,6 +43,8 @@ const workflowSteps = [
   "整理 diff patch 上下文",
   "生成总结、风险和 Review 建议",
 ];
+
+const defaultModelOptions = ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"];
 
 function getInputState(prUrl) {
   if (!prUrl.trim()) {
@@ -98,7 +102,7 @@ function truncatePatch(patch) {
 }
 
 /**
- * 首页是 PR 4 的主要交互面。
+ * 首页是 AI PR Review 的主要交互面。
  * 前端只请求项目自己的 API Route，GitHub Token、DeepSeek API Key 和外部 API 细节都由服务端处理。
  */
 export default function Home() {
@@ -117,6 +121,20 @@ export default function Home() {
   const [isRiskLoading, setIsRiskLoading] = useState(false);
   const [isReviewLoading, setIsReviewLoading] = useState(false);
   const [showLowConfidence, setShowLowConfidence] = useState(false);
+  const [isModelConfigOpen, setIsModelConfigOpen] = useState(false);
+  const [modelConfig, setModelConfig] = useState(null);
+  const [modelConfigForm, setModelConfigForm] = useState({
+    deepSeekApiKey: "",
+    deepSeekModel: "deepseek-v4-flash",
+    contextApiKey: "",
+    contextModel: "deepseek-v4-pro",
+  });
+  const [modelOptions, setModelOptions] = useState(defaultModelOptions);
+  const [modelConfigStatus, setModelConfigStatus] = useState("");
+  const [modelConfigError, setModelConfigError] = useState("");
+  const [isModelConfigLoading, setIsModelConfigLoading] = useState(false);
+  const [isModelConfigSaving, setIsModelConfigSaving] = useState(false);
+  const [isModelListLoading, setIsModelListLoading] = useState(false);
 
   const inputState = useMemo(() => getInputState(prUrl), [prUrl]);
   const visibleReviewSuggestions = useMemo(() => {
@@ -124,6 +142,125 @@ export default function Home() {
 
     return showLowConfidence ? suggestions : suggestions.filter((suggestion) => suggestion.confidence >= 0.5);
   }, [reviewResult, showLowConfidence]);
+
+  async function loadModelConfig() {
+    setIsModelConfigLoading(true);
+    setModelConfigError("");
+
+    try {
+      const response = await fetch("/api/model-config");
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error?.message || "读取模型配置失败。");
+      }
+
+      setModelConfig(data.config);
+      setModelOptions(data.config.availableModels?.length ? data.config.availableModels : defaultModelOptions);
+      setModelConfigForm((current) => ({
+        ...current,
+        deepSeekModel: data.config.deepSeekModel,
+        contextModel: data.config.contextModel,
+      }));
+    } catch (requestError) {
+      setModelConfigError(requestError.message);
+    } finally {
+      setIsModelConfigLoading(false);
+    }
+  }
+
+  /**
+   * 打开本地模型配置面板。
+   * 后端只返回脱敏后的 Key 状态，完整 API Key 需要用户重新输入后才能保存。
+   */
+  async function handleOpenModelConfig() {
+    setIsModelConfigOpen(true);
+    setModelConfigStatus("");
+    await loadModelConfig();
+  }
+
+  /**
+   * 根据用户刚输入的 DeepSeek API Key 拉取账号可用模型。
+   * API Key 只发给本地后端用于查询模型列表，不会在这个动作中写入 .env.local。
+   */
+  async function handleLoadModelOptions() {
+    setIsModelListLoading(true);
+    setModelConfigError("");
+    setModelConfigStatus("");
+
+    try {
+      const response = await fetch("/api/model-config/models", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ deepSeekApiKey: modelConfigForm.deepSeekApiKey }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error?.message || "获取 DeepSeek 模型列表失败。");
+      }
+
+      setModelOptions(data.models?.length ? data.models : defaultModelOptions);
+      setModelConfigStatus("已获取该 API Key 可用模型，请选择后保存配置。");
+      setModelConfigForm((current) => {
+        const nextModel = data.models?.includes(current.deepSeekModel) ? current.deepSeekModel : data.models?.[0] || current.deepSeekModel;
+        const nextContextModel = data.models?.includes(current.contextModel)
+          ? current.contextModel
+          : data.models?.[1] || nextModel;
+
+        return {
+          ...current,
+          deepSeekModel: nextModel,
+          contextModel: nextContextModel,
+        };
+      });
+    } catch (requestError) {
+      setModelConfigError(requestError.message);
+    } finally {
+      setIsModelListLoading(false);
+    }
+  }
+
+  /**
+   * 保存 DeepSeek API Key 和模型配置。
+   * 保存后服务端会同步更新 .env.local 和当前 Node 进程环境变量，后续 AI 请求会使用新配置。
+   */
+  async function handleSaveModelConfig(event) {
+    event.preventDefault();
+    setIsModelConfigSaving(true);
+    setModelConfigError("");
+    setModelConfigStatus("");
+
+    try {
+      const response = await fetch("/api/model-config", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(modelConfigForm),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error?.message || "保存模型配置失败。");
+      }
+
+      setModelConfig(data.config);
+      setModelOptions(data.config.availableModels?.length ? data.config.availableModels : modelOptions);
+      setModelConfigStatus("模型配置已保存，后续 AI 分析会使用新配置。");
+      setModelConfigForm((current) => ({
+        ...current,
+        deepSeekApiKey: "",
+        contextApiKey: "",
+      }));
+    } catch (requestError) {
+      setModelConfigError(requestError.message);
+    } finally {
+      setIsModelConfigSaving(false);
+    }
+  }
 
   /**
    * 提交 PR URL 后调用后端接口获取真实 GitHub 数据。
@@ -314,8 +451,109 @@ export default function Home() {
           </p>
           <h1>AI PR Review Assistant</h1>
         </div>
-        <span className="stage-badge">PR 5 Review 建议版本</span>
+        <button type="button" className="model-config-trigger" onClick={handleOpenModelConfig}>
+          <Settings size={17} aria-hidden="true" />
+          模型配置
+        </button>
       </header>
+
+      {isModelConfigOpen ? (
+        <section className="model-config-panel" aria-label="模型配置">
+          <div className="model-config-header">
+            <div>
+              <h2>DeepSeek 模型配置</h2>
+              <p>本地演示使用，保存后会更新当前项目的 .env.local 文件。</p>
+            </div>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="关闭模型配置"
+              onClick={() => setIsModelConfigOpen(false)}
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
+          </div>
+
+          {isModelConfigLoading ? <p className="summary-empty">正在读取本地模型配置...</p> : null}
+          {modelConfig ? (
+            <div className="model-config-status">
+              <span>普通分析 Key：{modelConfig.hasDeepSeekApiKey ? modelConfig.deepSeekApiKeyPreview : "未配置"}</span>
+              <span>普通模型：{modelConfig.deepSeekModel}</span>
+              <span>大上下文 Key：{modelConfig.hasContextApiKey ? modelConfig.contextApiKeyPreview : "未配置"}</span>
+              <span>大上下文模型：{modelConfig.contextModel}</span>
+            </div>
+          ) : null}
+
+          <form className="model-config-form" onSubmit={handleSaveModelConfig}>
+            <label>
+              DeepSeek API Key
+              <input
+                type="password"
+                value={modelConfigForm.deepSeekApiKey}
+                onChange={(event) =>
+                  setModelConfigForm((current) => ({ ...current, deepSeekApiKey: event.target.value }))
+                }
+                placeholder="留空则保留当前 Key"
+              />
+            </label>
+            <label>
+              DeepSeek 模型
+              <select
+                value={modelConfigForm.deepSeekModel}
+                onChange={(event) =>
+                  setModelConfigForm((current) => ({ ...current, deepSeekModel: event.target.value }))
+                }
+              >
+                {modelOptions.map((model) => (
+                  <option value={model} key={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              大上下文 API Key
+              <input
+                type="password"
+                value={modelConfigForm.contextApiKey}
+                onChange={(event) =>
+                  setModelConfigForm((current) => ({ ...current, contextApiKey: event.target.value }))
+                }
+                placeholder="可选，历史对比分析预留"
+              />
+            </label>
+            <label>
+              大上下文模型
+              <select
+                value={modelConfigForm.contextModel}
+                onChange={(event) =>
+                  setModelConfigForm((current) => ({ ...current, contextModel: event.target.value }))
+                }
+              >
+                {modelOptions.map((model) => (
+                  <option value={model} key={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="button" className="secondary-config-button" onClick={handleLoadModelOptions} disabled={isModelListLoading}>
+              {isModelListLoading ? <Loader2 className="spin" size={17} aria-hidden="true" /> : null}
+              {isModelListLoading ? "获取中" : "获取模型"}
+            </button>
+            <button type="submit" disabled={isModelConfigSaving}>
+              {isModelConfigSaving ? <Loader2 className="spin" size={17} aria-hidden="true" /> : null}
+              {isModelConfigSaving ? "保存中" : "保存配置"}
+            </button>
+          </form>
+          <p className="model-config-note">
+            这个配置入口只适合本地演示环境。别人下载代码后仍需要创建自己的 .env.local 文件，不能把真实 Key
+            提交到 GitHub。
+          </p>
+          {modelConfigStatus ? <p className="copy-status">{modelConfigStatus}</p> : null}
+          {modelConfigError ? <p className="error-message">{modelConfigError}</p> : null}
+        </section>
+      ) : null}
 
       <section className="workspace" aria-label="AI PR Review 工作台">
         <div className="primary-panel">
