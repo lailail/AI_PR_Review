@@ -417,6 +417,61 @@ h1 {
   line-height: 1.6;
 }
 
+.history-comparison-control {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid rgba(14, 124, 102, 0.18);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.history-comparison-control h3 {
+  margin-bottom: 8px;
+  font-size: 1rem;
+}
+
+.analysis-mode-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.analysis-mode-options label {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid rgba(23, 26, 31, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #26313d;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.analysis-mode-options label.active {
+  border-color: rgba(14, 124, 102, 0.42);
+  background: #f3faf6;
+  color: var(--accent-dark);
+}
+
+.analysis-mode-options input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.history-compare-button {
+  margin-top: 12px;
+  background: #4f5d75 !important;
+}
+
+.history-compare-button:hover {
+  background: #344258 !important;
+}
+
 .error-message {
   margin: 14px 0 0;
   padding: 12px 14px;
@@ -862,6 +917,56 @@ h1 {
   background: #f2f7fc;
 }
 
+.history-comparison-panel {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 22px;
+  padding: 20px;
+  border: 1px solid rgba(79, 93, 117, 0.24);
+  border-radius: 8px;
+  background: #f6f8fb;
+}
+
+.comparison-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.comparison-meta span {
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: #ffffff;
+  color: #4f5d75;
+  font-size: 0.84rem;
+  font-weight: 850;
+}
+
+.comparison-list {
+  padding: 14px;
+  border: 1px solid rgba(79, 93, 117, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.comparison-list h4 {
+  margin: 0 0 10px;
+}
+
+.comparison-list ul {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.history-comparison-note {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 760;
+  line-height: 1.7;
+}
+
 .pr-body h3,
 .files-heading h3 {
   margin-bottom: 8px;
@@ -1278,6 +1383,10 @@ h1 {
   }
 
   .history-content {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-mode-options {
     grid-template-columns: 1fr;
   }
 

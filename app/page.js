@@ -180,6 +180,10 @@ export default function Home() {
   const [selectedHistoryRecord, setSelectedHistoryRecord] = useState(null);
   const [selectedHistoryRepositoryKey, setSelectedHistoryRepositoryKey] = useState("");
   const [historyMessage, setHistoryMessage] = useState("");
+  const [analysisMode, setAnalysisMode] = useState("current-only");
+  const [historyComparisonResult, setHistoryComparisonResult] = useState(null);
+  const [historyComparisonError, setHistoryComparisonError] = useState("");
+  const [isHistoryComparisonLoading, setIsHistoryComparisonLoading] = useState(false);
 
   const pr = pullRequestData?.pr;
   const files = useMemo(() => pullRequestData?.files || [], [pullRequestData]);
@@ -218,6 +222,13 @@ export default function Home() {
 
     return findHistoryByRepository(historyRecords, getRepositoryKey(pr));
   }, [historyRecords, pr]);
+  const comparisonHistoryCandidates = useMemo(() => {
+    if (!pr) {
+      return [];
+    }
+
+    return currentRepositoryHistory.filter((record) => record.prNumber !== pr.number);
+  }, [currentRepositoryHistory, pr]);
   const displayedPr = useMemo(() => {
     if (!selectedHistoryRecord) {
       return pr;
@@ -438,6 +449,9 @@ export default function Home() {
     setCopyStatus("");
     setPullRequestData(null);
     setSelectedHistoryRecord(null);
+    setHistoryComparisonResult(null);
+    setHistoryComparisonError("");
+    setAnalysisMode("current-only");
     setIsLoading(true);
 
     try {
@@ -485,6 +499,8 @@ export default function Home() {
     setSummary(null);
     setReviewResult(null);
     setReviewError("");
+    setHistoryComparisonResult(null);
+    setHistoryComparisonError("");
     setCopyStatus("");
     setIsSummaryLoading(true);
 
@@ -527,6 +543,8 @@ export default function Home() {
     setRiskResult(null);
     setReviewResult(null);
     setReviewError("");
+    setHistoryComparisonResult(null);
+    setHistoryComparisonError("");
     setCopyStatus("");
     setIsRiskLoading(true);
 
@@ -567,6 +585,8 @@ export default function Home() {
 
     setReviewError("");
     setReviewResult(null);
+    setHistoryComparisonResult(null);
+    setHistoryComparisonError("");
     setCopyStatus("");
     setIsReviewLoading(true);
 
@@ -613,6 +633,47 @@ export default function Home() {
       setCopyStatus("已复制 Markdown Review 结果。");
     } catch {
       setCopyStatus("复制失败，请手动选择 Markdown 内容复制。");
+    }
+  }
+
+  async function handleGenerateHistoryComparison() {
+    if (!pullRequestData?.pr || !comparisonHistoryCandidates.length) {
+      setHistoryComparisonError("没有可用于对比的同仓库历史记录。");
+      return;
+    }
+
+    setHistoryComparisonError("");
+    setHistoryComparisonResult(null);
+    setIsHistoryComparisonLoading(true);
+
+    try {
+      const response = await fetch("/api/history-comparison", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          mode: "compare-with-history",
+          current: {
+            pr: pullRequestData.pr,
+            summary,
+            risks: riskResult?.risks || [],
+            suggestions: reviewResult?.suggestions || [],
+          },
+          history: comparisonHistoryCandidates,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error?.message || "生成历史 PR 对比分析失败。");
+      }
+
+      setHistoryComparisonResult(data.comparison);
+    } catch (requestError) {
+      setHistoryComparisonError(requestError.message);
+    } finally {
+      setIsHistoryComparisonLoading(false);
     }
   }
 
@@ -819,6 +880,51 @@ export default function Home() {
                 {isReviewLoading ? "生成中" : "生成 Review 建议"}
               </button>
               <p>综合 PR 数据、变更总结和风险识别结果，生成可复制到 GitHub 的 Markdown Review。</p>
+              <div className="history-comparison-control">
+                <h3>历史上下文对比</h3>
+                <p>
+                  {comparisonHistoryCandidates.length
+                    ? `已找到 ${comparisonHistoryCandidates.length} 条同仓库历史记录，可手动启用历史对比。`
+                    : "当前还没有可用于对比的同仓库历史记录。"}
+                </p>
+                <div className="analysis-mode-options" role="radiogroup" aria-label="历史上下文分析模式">
+                  <label className={analysisMode === "current-only" ? "active" : ""}>
+                    <input
+                      type="radio"
+                      name="analysis-mode"
+                      value="current-only"
+                      checked={analysisMode === "current-only"}
+                      onChange={() => setAnalysisMode("current-only")}
+                    />
+                    仅分析当前 PR
+                  </label>
+                  <label className={analysisMode === "compare-with-history" ? "active" : ""}>
+                    <input
+                      type="radio"
+                      name="analysis-mode"
+                      value="compare-with-history"
+                      checked={analysisMode === "compare-with-history"}
+                      onChange={() => setAnalysisMode("compare-with-history")}
+                      disabled={!comparisonHistoryCandidates.length}
+                    />
+                    结合历史 PR 对比分析
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  className="history-compare-button"
+                  onClick={handleGenerateHistoryComparison}
+                  disabled={
+                    analysisMode !== "compare-with-history" ||
+                    !comparisonHistoryCandidates.length ||
+                    isHistoryComparisonLoading
+                  }
+                >
+                  {isHistoryComparisonLoading ? <Loader2 className="spin" size={18} aria-hidden="true" /> : <History size={18} aria-hidden="true" />}
+                  {isHistoryComparisonLoading ? "对比中" : "生成历史对比分析"}
+                </button>
+                {historyComparisonError ? <p className="error-message">{historyComparisonError}</p> : null}
+              </div>
             </div>
           ) : null}
         </div>
@@ -1043,6 +1149,10 @@ export default function Home() {
               )}
             </div>
 
+            {historyComparisonResult ? (
+              <HistoryComparisonResult comparison={historyComparisonResult} />
+            ) : null}
+
             <div className="files-panel">
               <div className="files-heading">
                 <FileCode2 size={20} aria-hidden="true" />
@@ -1215,6 +1325,44 @@ function ReviewSuggestionResult({
         <summary>查看 Markdown 预览</summary>
         <pre>{effectiveMarkdown || "暂无可预览的 Markdown 内容。"}</pre>
       </details>
+    </div>
+  );
+}
+
+function HistoryComparisonResult({ comparison }) {
+  return (
+    <div className="history-comparison-panel">
+      <div className="files-heading">
+        <History size={20} aria-hidden="true" />
+        <h3>历史 PR 对比分析</h3>
+      </div>
+      <div className="comparison-meta">
+        <span>{comparison.repository}</span>
+        <span>{Math.round((comparison.confidence || 0) * 100)}% 置信度</span>
+      </div>
+      <ComparisonList title="引用的历史 PR" items={(comparison.comparedPrs || []).map((item) => `#${item.number} ${item.title}：${item.relation}`)} />
+      <ComparisonList title="影响分析" items={comparison.impactAnalysis} />
+      <ComparisonList title="重复风险" items={comparison.repeatedRisks} />
+      <ComparisonList title="Review 关注点" items={comparison.reviewFocus} />
+      <ComparisonList title="上下文说明" items={comparison.contextNotes} />
+      <p className="history-comparison-note">历史对比结果只基于当前 PR 分析结果和同仓库历史摘要生成，仍需 reviewer 结合真实代码确认。</p>
+    </div>
+  );
+}
+
+function ComparisonList({ title, items = [] }) {
+  return (
+    <div className="comparison-list">
+      <h4>{title}</h4>
+      {items.length ? (
+        <ul>
+          {items.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="summary-empty">暂无明确结论。</p>
+      )}
     </div>
   );
 }
