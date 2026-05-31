@@ -65,6 +65,59 @@ describe("detectRuleSignals", () => {
     expect(signals.find((signal) => signal.file === "package.json").labels).toContain("配置/依赖");
     expect(signals.find((signal) => signal.file === "tests/user.test.js").labels).toContain("测试变化");
   });
+
+  test("downgrades documentation keyword matches to documentation signals", () => {
+    const [signal] = detectRuleSignals([
+      {
+        filename: "README.md",
+        status: "modified",
+        additions: 12,
+        deletions: 2,
+        changes: 14,
+        patch: "+Configure API token and auth settings in .env.local",
+      },
+    ]);
+
+    expect(signal.labels).toEqual(["文档说明"]);
+    expect(signal.reason).toContain("文档内容提到");
+  });
+
+  test("marks custom error classes that pass code to Error message", () => {
+    const [signal] = detectRuleSignals([
+      {
+        filename: "lib/risk-detection.js",
+        status: "added",
+        additions: 10,
+        deletions: 0,
+        changes: 10,
+        patch: [
+          "+export class RiskDetectionError extends Error {",
+          "+  constructor(code, message, status = 500) {",
+          "+    super(code);",
+          "+  }",
+          "+}",
+        ].join("\n"),
+      },
+    ]);
+
+    expect(signal.labels).toContain("错误处理");
+    expect(signal.reason).toContain("super(code)");
+  });
+
+  test("does not mark type widening when any appears inside another word", () => {
+    const signals = detectRuleSignals([
+      {
+        filename: "app/globals.css",
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        changes: 1,
+        patch: "+.company-banner { color: #111827; }",
+      },
+    ]);
+
+    expect(signals).toEqual([]);
+  });
 });
 
 describe("buildRiskDetectionContext", () => {
@@ -174,5 +227,23 @@ describe("requestRiskDetection", () => {
     await expect(requestRiskDetection(samplePr, sampleFiles)).rejects.toMatchObject({
       code: "RISK_DETECTION_CONFIG_MISSING",
     });
+  });
+
+  test("uses deterministic temperature when calling DeepSeek", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          choices: [{ message: { content: '{"risks":[]}' } }],
+        };
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestRiskDetection(samplePr, sampleFiles);
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).temperature).toBe(0);
   });
 });
