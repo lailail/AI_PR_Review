@@ -152,6 +152,7 @@ describe("history-comparison", () => {
 
     expect(fetchCalls[0].options.headers.Authorization).toBe("Bearer context-key");
     expect(JSON.parse(fetchCalls[0].options.body).model).toBe("deepseek-v4-pro");
+    expect(JSON.parse(fetchCalls[0].options.body).temperature).toBe(0);
     expect(result.comparison.impactAnalysis).toEqual(["影响历史功能"]);
   });
 

@@ -1111,6 +1111,17 @@ h1 {
   font-weight: 800;
 }
 
+.review-context-note {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(14, 124, 102, 0.18);
+  border-radius: 8px;
+  background: rgba(14, 124, 102, 0.08);
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
 .rule-signal-panel {
   padding: 14px;
   border: 1px solid rgba(23, 26, 31, 0.1);
@@ -1120,6 +1131,13 @@ h1 {
 
 .rule-signal-panel h4 {
   margin: 0 0 10px;
+}
+
+.rule-signal-panel > p {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.6;
 }
 
 .rule-signal-panel ul {
@@ -1132,22 +1150,37 @@ h1 {
 
 .rule-signal-panel li {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, auto);
   gap: 12px;
+  align-items: start;
+  padding: 10px 0;
+  border-top: 1px solid rgba(23, 26, 31, 0.08);
   color: var(--muted);
 }
 
 .rule-signal-panel strong {
+  display: block;
   overflow: hidden;
   color: var(--foreground);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.rule-signal-panel small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
 .rule-signal-panel span {
+  justify-self: end;
   color: var(--warning);
   font-size: 0.86rem;
   font-weight: 800;
+  line-height: 1.5;
+  text-align: right;
 }
 
 .review-suggestion-result {
@@ -1474,6 +1507,11 @@ h1 {
 
   .rule-signal-panel li {
     grid-template-columns: 1fr;
+  }
+
+  .rule-signal-panel span {
+    justify-self: start;
+    text-align: left;
   }
 
   .review-toolbar {

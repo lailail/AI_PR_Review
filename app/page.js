@@ -1118,7 +1118,7 @@ export default function Home() {
                 <p className="summary-empty">
                   {selectedHistoryRecord
                     ? "这条历史记录暂未保存风险识别结果。"
-                    : "点击“识别风险代码”后，这里会展示风险等级、证据、原因、建议和置信度。"}
+                    : "点击“识别风险代码”后，这里会展示风险等级、证据、原因和置信度。"}
                 </p>
               )}
             </div>
@@ -1135,6 +1135,11 @@ export default function Home() {
                   totalCount={displayedReviewResult.suggestions.length}
                   markdown={displayedReviewResult.markdown}
                   showLowConfidence={showLowConfidence}
+                  hasNoRiskButHasSuggestions={
+                    !selectedHistoryRecord &&
+                    (displayedRiskResult?.risks || []).length === 0 &&
+                    displayedReviewResult.suggestions.length > 0
+                  }
                   copyStatus={copyStatus}
                   onToggleLowConfidence={() => setShowLowConfidence((value) => !value)}
                   onCopyMarkdown={handleCopyReviewMarkdown}
@@ -1279,6 +1284,7 @@ function ReviewSuggestionResult({
   totalCount = 0,
   markdown = "",
   showLowConfidence,
+  hasNoRiskButHasSuggestions = false,
   copyStatus,
   onToggleLowConfidence,
   onCopyMarkdown,
@@ -1304,6 +1310,11 @@ function ReviewSuggestionResult({
       </div>
 
       {copyStatus ? <p className="copy-status">{copyStatus}</p> : null}
+      {hasNoRiskButHasSuggestions ? (
+        <p className="review-context-note">
+          风险识别未发现明确高风险，但 Review 建议仍会基于 diff 和变更总结给出中低风险或可维护性建议。
+        </p>
+      ) : null}
       {hiddenCount > 0 ? <p className="low-confidence">已隐藏 {hiddenCount} 条低置信度建议。</p> : null}
 
       {suggestions.length > 0 ? (
@@ -1327,6 +1338,10 @@ function ReviewSuggestionResult({
             </article>
           ))}
         </div>
+      ) : totalCount > 0 ? (
+        <p className="summary-empty">
+          已生成 {totalCount} 条 Review 建议，但当前全部属于低置信度结果。勾选“显示低置信度建议”后可以查看具体内容。
+        </p>
       ) : (
         <p className="summary-empty">未发现明确需要提出的 Review 建议，仍建议结合业务上下文人工确认。</p>
       )}
@@ -1426,10 +1441,6 @@ function RiskDetectionResult({ risks = [], ruleSignals = [] }) {
                 <strong>原因：</strong>
                 {risk.reason}
               </p>
-              <p>
-                <strong>建议：</strong>
-                {risk.suggestion}
-              </p>
               {risk.confidence < 0.5 ? <p className="low-confidence">低置信度，建议人工确认。</p> : null}
             </article>
           ))}
@@ -1441,10 +1452,14 @@ function RiskDetectionResult({ risks = [], ruleSignals = [] }) {
       {ruleSignals.length > 0 ? (
         <div className="rule-signal-panel">
           <h4>规则预筛选信号</h4>
+          <p>以下内容来自文件名和 diff 关键词命中，只代表需要重点关注，不等同于最终风险结论。</p>
           <ul>
             {ruleSignals.map((signal) => (
               <li key={signal.file}>
-                <strong>{signal.file}</strong>
+                <div>
+                  <strong>{signal.file}</strong>
+                  {signal.reason ? <small>{signal.reason}</small> : null}
+                </div>
                 <span>{signal.labels.join("、")}</span>
               </li>
             ))}

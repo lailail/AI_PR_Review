@@ -217,4 +217,22 @@ describe("requestReviewSuggestions", () => {
       code: "REVIEW_SUGGESTION_CONFIG_MISSING",
     });
   });
+
+  test("uses deterministic temperature when calling DeepSeek", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          choices: [{ message: { content: '{"suggestions":[]}' } }],
+        };
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestReviewSuggestions(samplePr, sampleFiles, sampleSummary, sampleRisks);
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).temperature).toBe(0);
+  });
 });
