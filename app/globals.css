@@ -1336,8 +1336,18 @@ h1 {
   color: var(--muted);
 }
 
+.patch-warning {
+  margin: 0;
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+  background: rgba(161, 92, 5, 0.1);
+  color: var(--warning);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
 .file-item pre {
-  max-height: 320px;
+  max-height: 520px;
   margin: 0;
   padding: 16px;
   overflow: auto;

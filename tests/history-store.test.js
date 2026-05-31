@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  buildChangedFileSnapshots,
   buildHistoryRecord,
   buildPatchDigest,
   findHistoryByRepository,
@@ -92,6 +93,98 @@ describe("history-store", () => {
     expect(record.patchDigest[0]).not.toHaveProperty("patch");
   });
 
+  test("builds changed file snapshots for full change display", () => {
+    const snapshots = buildChangedFileSnapshots(
+      [
+        {
+          filename: "app/page.js",
+          status: "modified",
+          additions: 9,
+          deletions: 2,
+          changes: 11,
+          patch: "0123456789abcdef",
+        },
+        {
+          filename: "public/logo.png",
+          status: "modified",
+          additions: 0,
+          deletions: 0,
+          changes: 1,
+        },
+      ],
+      { maxPatchLength: 10 },
+    );
+
+    expect(snapshots).toEqual([
+      {
+        filename: "app/page.js",
+        status: "modified",
+        additions: 9,
+        deletions: 2,
+        changes: 11,
+        patch: "0123456789",
+        isPatchTruncated: true,
+        hasPatch: true,
+      },
+      {
+        filename: "public/logo.png",
+        status: "modified",
+        additions: 0,
+        deletions: 0,
+        changes: 1,
+        patch: "",
+        isPatchTruncated: false,
+        hasPatch: false,
+      },
+    ]);
+  });
+
+  test("stores changed file snapshots in history record for later display", () => {
+    const record = buildHistoryRecord(pr, files, null, [], [], {
+      now: "2026-05-30T10:00:00.000Z",
+      maxChangedFilePatchLength: 12,
+    });
+
+    expect(record.changedFileSnapshots).toEqual([
+      {
+        filename: "app/page.js",
+        status: "modified",
+        additions: 0,
+        deletions: 0,
+        changes: 100,
+        patch: "page patchpa",
+        isPatchTruncated: true,
+        hasPatch: true,
+      },
+      {
+        filename: "README.md",
+        status: "modified",
+        additions: 0,
+        deletions: 0,
+        changes: 20,
+        patch: "readme patch",
+        isPatchTruncated: false,
+        hasPatch: true,
+      },
+    ]);
+  });
+
+  test("stores rule signals with history record for risk display", () => {
+    const ruleSignals = [
+      {
+        file: "app/api/auth/route.js",
+        labels: ["权限/鉴权", "接口输入"],
+        reason: "命中权限和接口关键词",
+      },
+    ];
+    const record = buildHistoryRecord(pr, files, null, [], [], {
+      now: "2026-05-30T10:00:00.000Z",
+      ruleSignals,
+    });
+
+    expect(record.ruleSignals).toEqual(ruleSignals);
+  });
+
   test("handles empty files and missing patch when building patch digest", () => {
     expect(buildPatchDigest()).toEqual([]);
 
@@ -176,6 +269,25 @@ describe("history-store", () => {
       title: "有效记录",
       analyzedAt: "2026-05-30T10:00:00.000Z",
       patchDigest: [{ filename: "app/page.js", excerpt: "@@ -1 +1 @@" }],
+      ruleSignals: [
+        {
+          file: "app/api/auth/route.js",
+          labels: ["权限/鉴权"],
+          reason: "命中权限关键词",
+        },
+      ],
+      changedFileSnapshots: [
+        {
+          filename: "app/page.js",
+          status: "modified",
+          additions: 3,
+          deletions: 1,
+          changes: 4,
+          patch: "@@ -1 +1 @@",
+          isPatchTruncated: false,
+          hasPatch: true,
+        },
+      ],
     };
 
     expect(
@@ -195,11 +307,30 @@ describe("history-store", () => {
         deletions: 0,
         prUrl: "",
         risks: [],
+        ruleSignals: [
+          {
+            file: "app/api/auth/route.js",
+            labels: ["权限/鉴权"],
+            reason: "命中权限关键词",
+          },
+        ],
         suggestions: [],
         summary: null,
       },
     ]);
 
     expect(normalizeHistoryRecords({ repositoryKey: "owner/repo" })).toEqual([]);
+  });
+
+  test("normalizes old history records without full change snapshots", () => {
+    const [record] = normalizeHistoryRecords([
+      {
+        repositoryKey: "owner/repo-a",
+        prNumber: 1,
+        patchDigest: [{ filename: "app/page.js", excerpt: "@@ -1 +1 @@" }],
+      },
+    ]);
+
+    expect(record.changedFileSnapshots).toEqual([]);
   });
 });
