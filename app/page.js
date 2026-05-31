@@ -135,12 +135,14 @@ function getFileStatusLabel(status) {
   return statusMap[status] || status;
 }
 
-function truncatePatch(patch) {
+function formatPatchForDisplay(file) {
+  const patch = typeof file?.patch === "string" ? file.patch : "";
+
   if (!patch) {
-    return "该文件没有可展示的 patch，可能是二进制文件或变更过大。";
+    return "该文件没有可展示的 diff，可能是二进制文件、删除文件或 GitHub 未返回 patch。";
   }
 
-  return patch.length > 900 ? `${patch.slice(0, 900)}\n...` : patch;
+  return patch;
 }
 
 /**
@@ -241,7 +243,7 @@ export default function Home() {
       state: "history",
       htmlUrl: selectedHistoryRecord.prUrl,
       updatedAt: selectedHistoryRecord.analyzedAt,
-      body: "该内容来自浏览器本地历史记录，只保存分析摘要和截断后的关键文件片段。",
+      body: "该内容来自浏览器本地历史记录，包含分析结果和用于回看的变更内容快照。",
       additions: selectedHistoryRecord.additions,
       deletions: selectedHistoryRecord.deletions,
       changedFiles: selectedHistoryRecord.changedFiles,
@@ -251,7 +253,10 @@ export default function Home() {
   }, [pr, selectedHistoryRecord]);
   const displayedSummary = selectedHistoryRecord ? selectedHistoryRecord.summary : summary;
   const displayedRiskResult = useMemo(
-    () => (selectedHistoryRecord ? { risks: selectedHistoryRecord.risks || [], ruleSignals: [] } : riskResult),
+    () =>
+      selectedHistoryRecord
+        ? { risks: selectedHistoryRecord.risks || [], ruleSignals: selectedHistoryRecord.ruleSignals || [] }
+        : riskResult,
     [riskResult, selectedHistoryRecord],
   );
   const displayedReviewResult = useMemo(
@@ -261,17 +266,12 @@ export default function Home() {
   const displayedFiles = useMemo(
     () =>
       selectedHistoryRecord
-        ? (selectedHistoryRecord.patchDigest || []).map((file) => ({
-        filename: file.filename,
-        status: file.status,
-        changes: file.changes,
-        additions: 0,
-        deletions: 0,
-        patch: file.excerpt,
-      }))
+        ? selectedHistoryRecord.changedFileSnapshots || []
         : files,
     [files, selectedHistoryRecord],
   );
+  const isLegacyHistoryWithoutChangeSnapshots =
+    Boolean(selectedHistoryRecord) && displayedFiles.length === 0 && (selectedHistoryRecord.changedFiles || 0) > 0;
   const visibleReviewSuggestions = useMemo(() => {
     const suggestions = displayedReviewResult?.suggestions || [];
 
@@ -294,6 +294,7 @@ export default function Home() {
       nextSummary,
       nextRiskResult?.risks || [],
       nextReviewResult?.suggestions || [],
+      { ruleSignals: nextRiskResult?.ruleSignals || [] },
     );
     const nextRecords = upsertHistoryRecord(historyRecords, record);
 
@@ -310,7 +311,6 @@ export default function Home() {
       return;
     }
 
-    setSelectedHistoryRecord(record);
     setSelectedHistoryRepositoryKey(record.repositoryKey);
   }
 
@@ -497,8 +497,8 @@ export default function Home() {
 
     setSummaryError("");
     setSummary(null);
-    setReviewResult(null);
     setReviewError("");
+    setSelectedHistoryRecord(null);
     setHistoryComparisonResult(null);
     setHistoryComparisonError("");
     setCopyStatus("");
@@ -521,7 +521,6 @@ export default function Home() {
       setSummary(data.summary);
       saveHistorySnapshot({
         nextSummary: data.summary,
-        nextReviewResult: null,
       });
     } catch (requestError) {
       setSummaryError(requestError.message);
@@ -541,8 +540,8 @@ export default function Home() {
 
     setRiskError("");
     setRiskResult(null);
-    setReviewResult(null);
     setReviewError("");
+    setSelectedHistoryRecord(null);
     setHistoryComparisonResult(null);
     setHistoryComparisonError("");
     setCopyStatus("");
@@ -565,7 +564,6 @@ export default function Home() {
       setRiskResult(data);
       saveHistorySnapshot({
         nextRiskResult: data,
-        nextReviewResult: null,
       });
     } catch (requestError) {
       setRiskError(requestError.message);
@@ -585,6 +583,7 @@ export default function Home() {
 
     setReviewError("");
     setReviewResult(null);
+    setSelectedHistoryRecord(null);
     setHistoryComparisonResult(null);
     setHistoryComparisonError("");
     setCopyStatus("");
@@ -1156,24 +1155,35 @@ export default function Home() {
             <div className="files-panel">
               <div className="files-heading">
                 <FileCode2 size={20} aria-hidden="true" />
-                <h3>{selectedHistoryRecord ? "关键文件摘要" : "变更文件"}</h3>
+                <h3>全部变更内容</h3>
               </div>
-              <div className="file-list">
-                {displayedFiles.map((file) => (
-                  <details className="file-item" key={file.filename}>
-                    <summary>
-                      <span className="file-name">{file.filename}</span>
-                      <span className={`file-status ${file.status}`}>
-                        {getFileStatusLabel(file.status)}
-                      </span>
-                      <span className="file-changes">
-                        {selectedHistoryRecord ? `${file.changes} 行摘要` : `+${file.additions} / -${file.deletions}`}
-                      </span>
-                    </summary>
-                    <pre>{truncatePatch(file.patch)}</pre>
-                  </details>
-                ))}
-              </div>
+              {isLegacyHistoryWithoutChangeSnapshots ? (
+                <p className="summary-empty">
+                  该历史记录创建于旧版本，未保存完整变更内容。请重新分析该 PR 后查看全部 diff。
+                </p>
+              ) : (
+                <div className="file-list">
+                  {displayedFiles.map((file) => (
+                    <details className="file-item" key={file.filename}>
+                      <summary>
+                        <span className="file-name">{file.filename}</span>
+                        <span className={`file-status ${file.status}`}>
+                          {getFileStatusLabel(file.status)}
+                        </span>
+                        <span className="file-changes">
+                          +{file.additions || 0} / -{file.deletions || 0}
+                        </span>
+                      </summary>
+                      {file.isPatchTruncated ? (
+                        <p className="patch-warning">
+                          当前文件变更过大，页面已保存前半部分 diff；如需查看完整内容，请打开 GitHub PR。
+                        </p>
+                      ) : null}
+                      <pre>{formatPatchForDisplay(file)}</pre>
+                    </details>
+                  ))}
+                </div>
+              )}
             </div>
           </>
         ) : (
@@ -1200,7 +1210,7 @@ function HistoryRecordDetail({ record }) {
   if (!record) {
     return (
       <div className="history-detail">
-        <p className="summary-empty">选择左侧某条历史记录后，可以查看该 PR 的总结、风险数量、建议数量和关键文件摘要。</p>
+        <p className="summary-empty">选择左侧某条历史记录后，可以查看该 PR 的总结、风险数量、建议数量和全部变更内容。</p>
       </div>
     );
   }
@@ -1231,20 +1241,20 @@ function HistoryRecordDetail({ record }) {
       </div>
       <p className="history-overview">{record.summary?.overview || "该记录暂未生成 AI 变更总结。"}</p>
       <div className="history-digest">
-        <h4>关键文件摘要</h4>
-        {record.patchDigest?.length ? (
+        <h4>全部变更内容</h4>
+        {record.changedFileSnapshots?.length ? (
           <ul>
-            {record.patchDigest.map((file) => (
+            {record.changedFileSnapshots.map((file) => (
               <li key={file.filename}>
                 <strong>{file.filename}</strong>
                 <span>
-                  {getFileStatusLabel(file.status)} · {file.changes} 行变更
+                  {getFileStatusLabel(file.status)} · +{file.additions || 0} / -{file.deletions || 0}
                 </span>
               </li>
             ))}
           </ul>
         ) : (
-          <p className="summary-empty">暂无关键文件摘要。</p>
+          <p className="summary-empty">旧版本历史记录未保存完整变更内容，请重新分析该 PR。</p>
         )}
       </div>
     </div>
