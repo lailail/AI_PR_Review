@@ -2,6 +2,10 @@
 
 AI PR Review Assistant 是一个面向 GitHub Pull Request 的 AI 代码评审辅助工具。用户输入 GitHub PR 链接后，系统会获取 PR 变更内容，并逐步生成 PR 变更总结、风险代码识别和 Review 建议，帮助开发者提升评审效率与质量。
 
+## Demo 视频
+
+[Demo 视频：录制完成后补充链接。](https://www.bilibili.com/video/BV1U6Vn6kEhz/?spm_id_from=333.1387.homepage.video_card.click&vd_source=f96a993231746d122a525ff5465187e4)
+
 ## 当前状态
 
 当前仓库已经具备从 GitHub PR 获取变更、调用 DeepSeek 生成总结/风险/Review 建议、保存本地历史记录，并进行同仓库历史 PR 对比分析的基础能力。
@@ -347,9 +351,6 @@ AI 分析会优先关注：
 
 这种设计可以避免一次性等待所有 AI 调用，也避免把无关上下文传给模型造成误报。
 
-## Demo 视频
-
-Demo 视频：录制完成后补充链接。
 
 ## 未来扩展方向
 
